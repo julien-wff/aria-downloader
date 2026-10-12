@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Aria Downloader</string>
+    <string name="downloads_title">Downloads</string>
+    <string name="downloads_empty_title">No downloads yet</string>
+    <string name="downloads_empty_description">Your downloads will appear here. Download support is coming in the next development milestones.</string>
+</resources>
