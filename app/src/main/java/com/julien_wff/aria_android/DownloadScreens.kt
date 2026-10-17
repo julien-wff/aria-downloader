@@ -27,6 +27,9 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +60,9 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var url by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("download") }
+    var referrer by rememberSaveable { mutableStateOf("") }
+    var userAgent by rememberSaveable { mutableStateOf("") }
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     var denied by rememberSaveable { mutableStateOf(false) }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
     var deletePublic by rememberSaveable { mutableStateOf(false) }
@@ -69,6 +75,8 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     LaunchedEffect(incoming, tasks, loaded) {
         val request = incoming ?: return@LaunchedEffect
         if (request.text != null) {
+            referrer = ""; userAgent = ""; advancedExpanded = false
+            model.clearError()
             url = request.text
             name = suggestedName(request.text)
             adding = true
@@ -122,6 +130,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                     }
                 }.getOrNull()
                 focus.clearFocus(); model.clearError(); selected = null
+                referrer = ""; userAgent = ""; advancedExpanded = false
                 url = draft?.url.orEmpty(); name = draft?.fileName ?: "download"; adding = true
             }
             Scaffold(
@@ -164,9 +173,12 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                         if (denied) Notice(R.drawable.ic_notifications_off, "Notifications are disabled. Download controls remain available here.")
                         when {
                             adding -> AddDownload(url, { url = it; model.clearError() }, name, { name = it; model.clearError() }, busy,
-                                error = error, start = {
+                                error = error,
+                                referrer = referrer, onReferrer = { referrer = it; model.clearError() },
+                                userAgent = userAgent, onUserAgent = { userAgent = it; model.clearError() },
+                                advancedExpanded = advancedExpanded, onAdvancedExpanded = { advancedExpanded = it }, start = {
                                     focus.clearFocus()
-                                    if (model.prepare(url, name)) {
+                                    if (model.prepare(url, name, referrer, userAgent)) {
                                         if (!model.askedNotificationPermission && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                             model.askedNotificationPermission = true
                                             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -247,10 +259,11 @@ private fun Section(title: String, icon: Int, content: @Composable ColumnScope.(
 
 @Composable
 private fun AddDownload(url: String, onUrl: (String) -> Unit, name: String, onName: (String) -> Unit,
-    busy: Boolean, error: String?, start: () -> Unit) {
+    busy: Boolean, error: String?, referrer: String, onReferrer: (String) -> Unit,
+    userAgent: String, onUserAgent: (String) -> Unit, advancedExpanded: Boolean,
+    onAdvancedExpanded: (Boolean) -> Unit, start: () -> Unit) {
     val focus = LocalFocusManager.current
     Column(Modifier.widthIn(max = 640.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Notice(R.drawable.ic_folder, "Files are saved to Downloads after the transfer completes.")
         Section("File to download", R.drawable.ic_link) {
             OutlinedTextField(url, onUrl, label = { Text("HTTP or HTTPS URL") }, modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { AriaIcon(R.drawable.ic_link) },
@@ -260,8 +273,36 @@ private fun AddDownload(url: String, onUrl: (String) -> Unit, name: String, onNa
                 leadingIcon = { AriaIcon(R.drawable.ic_description) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), singleLine = true)
-            if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
+        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainer) {
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().clickable(role = Role.Button) {
+                    focus.clearFocus()
+                    onAdvancedExpanded(!advancedExpanded)
+                }.semantics { stateDescription = if (advancedExpanded) "Expanded" else "Collapsed" }
+                    .padding(20.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AriaIcon(R.drawable.ic_tune)
+                    Text("Advanced", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Icon(painterResource(R.drawable.ic_expand_more), contentDescription = null,
+                        modifier = Modifier.rotate(if (advancedExpanded) 180f else 0f))
+                }
+                if (advancedExpanded) Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedTextField(referrer, onReferrer, label = { Text("HTTP referrer") },
+                        supportingText = { Text("Optional page URL required by the server") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }))
+                    OutlinedTextField(userAgent, onUserAgent, label = { Text("User-Agent") },
+                        supportingText = { Text("Optional override for this download") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }))
+                }
+            }
+        }
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         Button(onClick = start, enabled = !busy && url.isNotBlank() && name.isNotBlank(),
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             AriaIcon(R.drawable.ic_download)

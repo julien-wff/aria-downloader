@@ -16,6 +16,47 @@ class ProductUiTest {
     @get:Rule(order = 0) val visibility = TestActivityVisibilityRule()
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
 
+    @Test fun advancedRequestFieldsCollapseRetainAndReset() {
+        compose.onNodeWithText("Add download").performClick()
+        compose.onNodeWithText("Files are saved to Downloads after the transfer completes.").assertDoesNotExist()
+        compose.onNodeWithText("HTTP referrer").assertDoesNotExist()
+        compose.onNodeWithText("User-Agent").assertDoesNotExist()
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP referrer").performScrollTo().performTextReplacement("https://example.org/page")
+        compose.onNodeWithText("User-Agent").performScrollTo().performTextReplacement("Custom/1.0")
+        compose.onNodeWithText("User-Agent").performImeAction()
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.onNodeWithText("User-Agent").assertDoesNotExist()
+        compose.activityRule.scenario.recreate()
+        compose.onNodeWithText("User-Agent").assertDoesNotExist()
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP referrer").performScrollTo().assertTextContains("https://example.org/page")
+        compose.onNodeWithText("User-Agent").performScrollTo().assertTextContains("Custom/1.0")
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Add download").performClick()
+        compose.onNodeWithText("HTTP referrer").assertDoesNotExist()
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP referrer").performScrollTo().assert(SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        compose.onNodeWithText("User-Agent").performScrollTo().assert(SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        compose.onNodeWithText("HTTP referrer").performScrollTo().performTextReplacement("relative")
+        compose.onNodeWithText("HTTP or HTTPS URL").performScrollTo().performTextReplacement("https://example.org/file")
+        compose.onNodeWithText("HTTP or HTTPS URL").performImeAction()
+        compose.onNodeWithText("Filename").performImeAction()
+        compose.onNodeWithText("Start download").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP referrer must be an absolute HTTP or HTTPS URL without credentials.").performScrollTo().assertIsDisplayed()
+        compose.runOnUiThread {
+            compose.activity.startActivity(Intent(compose.activity, MainActivity::class.java)
+                .setAction(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, "https://example.org/shared.bin"))
+        }
+        compose.onNodeWithText("HTTP referrer").assertDoesNotExist()
+        compose.onNodeWithText("Advanced").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP referrer").performScrollTo().assert(SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+    }
+
     @Test fun addValidatesInputAndShareIntakeRequiresExplicitStart() {
         compose.onNodeWithText("Add download").performClick()
         compose.onNodeWithText("HTTP or HTTPS URL").performTextReplacement("ftp://invalid.example/file")

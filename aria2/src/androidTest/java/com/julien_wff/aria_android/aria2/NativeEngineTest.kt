@@ -58,6 +58,22 @@ class NativeEngineTest {
         // Subsequent instrumented transfers also assert that initialization can recover.
     }
 
+    @Test fun perDownloadHeadersReachTheHttpServer() = runBlocking {
+        val root = root()
+        val engine = engine(root)
+        try {
+            FixtureServer().use { server ->
+                engine.start()
+                val options = EngineOptions(referrer = "https://example.org/page", userAgent = "Custom/1.0")
+                val id = engine.add(EngineRequest(server.url("/file"), options = options))
+                engine.await(id, EngineTaskState.COMPLETED)
+                val received = synchronized(server.receivedHeaders) { server.receivedHeaders.toList() }
+                assertTrue(received.isNotEmpty())
+                assertTrue(received.all { it["referer"] == options.referrer && it["user-agent"] == options.userAgent })
+            }
+        } finally { engine.close(); root.deleteRecursively() }
+    }
+
     @Test fun httpsDownloadVerifiesContentAndStopsWhenIdle() = runBlocking {
         val root = root()
         val engine = engine(root)
@@ -190,6 +206,7 @@ class NativeEngineTest {
     }
 
     private inner class FixtureServer(certificate: String? = null, val length: Long = 2L * 1024 * 1024) : Closeable {
+        val receivedHeaders = Collections.synchronizedList(mutableListOf<Map<String, String>>())
         private val block = ByteArray(8192) { (it % 251).toByte() }
         private val executor = Executors.newCachedThreadPool()
         private val clients = Collections.synchronizedSet(mutableSetOf<Socket>())
@@ -244,6 +261,7 @@ class NativeEngineTest {
                 if (line.isEmpty()) break
                 headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim()
             }
+            receivedHeaders += headers.toMap()
             val output = client.getOutputStream()
             Log.i("AriaFixture", "$path range=${headers["range"]}")
             if (path == "/redirect") {

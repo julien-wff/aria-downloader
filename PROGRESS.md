@@ -1,5 +1,34 @@
 # Development progress
 
+## 2026-10-17 - Per-download HTTP options
+
+- Removed the save-location notice from Add download. Added an accessible Advanced
+  section, collapsed for each new form, with optional HTTP referrer and User-Agent.
+- Draft values survive collapsing and Activity recreation, and reset for fresh
+  clipboard/share intake. Validation runs before notification permission requests.
+- Persisted overrides in Room schema v3 with a non-destructive v2 migration; resume,
+  recovery and retry retain them. Native checkpoints retain headers, and clearing
+  engine overrides restores defaults.
+- Build, lint, all 59 JVM tests and the focused Advanced device regression passed:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest :downloads:testDebugUnitTest :aria2:testDebugUnitTest :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.julien_wff.aria_android.ProductUiTest#advancedRequestFieldsCollapseRetainAndReset
+  ```
+
+- The broader verification command was:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest :downloads:testDebugUnitTest :aria2:testDebugUnitTest connectedDebugAndroidTest
+  ```
+
+  All 13 downloads device tests passed, including v1/v2 migrations and persisted
+  headers. Seven native tests passed, including real HTTP header delivery; the
+  opt-in large-file test was skipped. Eight app tests passed, including Advanced;
+  clipboard coverage was skipped because the Samsung SM-S948B (Android 17/API 37)
+  was locked. The command failed because the existing background pause/resume test
+  timed out after 60 seconds. Background resume and unlocked clipboard behavior
+  remain unverified by this run; the full device suite is not claimed as passing.
+
 ## 2026-10-17 - Stable settings autosave layout
 
 - Removed the transient saving row that inserted and removed space above the form

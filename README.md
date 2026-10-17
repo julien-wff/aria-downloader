@@ -17,7 +17,6 @@ progress and quick controls.
 
 - Manage concurrent downloads in a persistent queue, with pause, resume, cancel and retry actions.
 - Continue user-started transfers in the background and recover interrupted work.
-- Save finished files to public Downloads, with retry available if saving is interrupted.
 - Review completed, failed and canceled transfers in History; open or share files after they have
   been saved.
 - Share a link into the app for review before starting a transfer.

@@ -78,6 +78,29 @@ class DownloadQueueTest {
         fun engineId(id: String) = EngineTaskId(saved.getValue(id).taskId!!)
     }
 
+    @Test fun requestOverridesSurviveAdmissionRecoveryAndRetry() = runTest {
+        val options = DownloadRequestOptions.fromInput(" https://example.org/page ", " Custom/1.0 ")
+        assertEquals(DownloadRequestOptions(), DownloadRequestOptions.fromInput("  ", ""))
+        assertThrows(IllegalArgumentException::class.java) { DownloadRequestOptions.fromInput("", "Agent\n") }
+        assertThrows(IllegalArgumentException::class.java) { DownloadRequestOptions.fromInput("relative", "") }
+        val f = Fixture(this)
+        val id = f.controller.enqueue("https://example.org/file", "file", options = options)
+        f.authorize(); runCurrent()
+        assertEquals(options.referrer, f.engine.requests.single().options.referrer)
+        assertEquals(options.userAgent, f.engine.requests.single().options.userAgent)
+        f.controller.pauseTask(id)
+        val recovered = Fixture(this, f.saved.values.toList())
+        runCurrent()
+        recovered.controller.resumeTask(id)
+        recovered.authorize(); runCurrent()
+        assertEquals(options.referrer, recovered.engine.requests.single().options.referrer)
+        assertEquals(options.userAgent, recovered.engine.requests.single().options.userAgent)
+        recovered.controller.cancelTask(id)
+        val retry = recovered.controller.retry(id)
+        assertEquals(options.referrer, recovered.saved.getValue(retry).referrer)
+        assertEquals(options.userAgent, recovered.saved.getValue(retry).userAgent)
+    }
+
     @Test fun fifoAdmissionHonorsLimitAndPauseReleasesOnlyItsSlot() = runTest {
         val f = Fixture(this)
         val ids = (1..4).map { f.add("$it.bin", DownloadSettings(concurrency = 2)) }

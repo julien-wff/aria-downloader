@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.julien_wff.aria_android.downloads.DownloadRequestOptions
 import com.julien_wff.aria_android.downloads.DownloadFiles
 import com.julien_wff.aria_android.downloads.DownloadRuntime
 import com.julien_wff.aria_android.downloads.DownloadSettings
@@ -59,7 +60,8 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     val deletionConsent = MutableStateFlow<android.content.IntentSender?>(null)
     private var pendingDeletion: Pair<String, Boolean>? = null
     var askedNotificationPermission = false
-    private var pendingRequest: Pair<String, String>? = null
+    private data class PendingRequest(val url: String, val name: String, val options: DownloadRequestOptions)
+    private var pendingRequest: PendingRequest? = null
 
     init {
         viewModelScope.launch {
@@ -75,11 +77,12 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
             incoming.value = IncomingDownload(taskId = it, fileAction = intent.getStringExtra("fileAction"))
         }
     }
-    fun prepare(url: String, name: String): Boolean {
+    fun prepare(url: String, name: String, referrer: String = "", userAgent: String = ""): Boolean {
         pendingRequest = null
         return try {
-            controller.validateRequest(url, name)
-            pendingRequest = url to name
+            val options = DownloadRequestOptions.fromInput(referrer, userAgent)
+            controller.validateRequest(url, name, options)
+            pendingRequest = PendingRequest(url, name, options)
             clearError()
             true
         } catch (error: IllegalArgumentException) {
@@ -91,7 +94,7 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
         val request = pendingRequest ?: return
         pendingRequest = null
         act(true) {
-            controller.enqueue(request.first, request.second, preferences.read())
+            controller.enqueue(request.url, request.name, preferences.read(), request.options)
             onAdded()
         }
     }

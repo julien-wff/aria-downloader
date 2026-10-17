@@ -174,10 +174,11 @@ class NativeDownloadEngine internal constructor(
         requireStarted()
         val task = task(id)
         check(task.snapshot.state in runnableStates + EngineTaskState.PAUSED)
-        if (opened && task.snapshot.state in runnableStates &&
-            task.request.options.connectionsPerServer != options.connectionsPerServer) {
-            // libaria2 can change connection counts only for reserved tasks.
-            // Recreate the session so a running task receives the new count too.
+        val previous = task.request.options
+        val headersChanged = previous.referrer != options.referrer || previous.userAgent != options.userAgent
+        if (opened && (headersChanged || (task.snapshot.state in runnableStates &&
+            previous.connectionsPerServer != options.connectionsPerServer))) {
+            // Recreate to apply running connection changes and restore default headers when cleared.
             task.request = task.request.copy(options = options)
             restartSession()
         } else {

@@ -25,17 +25,32 @@ value class EngineTaskId(val value: String)
 data class EngineOptions(
     val connectionsPerServer: Int = 4,
     val downloadLimitBytesPerSecond: Long = 0,
+    val referrer: String? = null,
+    val userAgent: String? = null,
 ) {
     init {
         require(connectionsPerServer in 1..16)
         require(downloadLimitBytesPerSecond >= 0)
+        require(userAgent == null || (userAgent.isNotBlank() && userAgent.none { it.isISOControl() })) {
+            "User-Agent must not contain control characters."
+        }
+        if (referrer != null) {
+            val uri = runCatching { URI(referrer) }.getOrNull()
+            require(referrer.none { it.isISOControl() } && uri != null &&
+                uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty() && uri.rawUserInfo == null) {
+                "HTTP referrer must be an absolute HTTP or HTTPS URL without credentials."
+            }
+        }
     }
 
     internal fun nativePairs() = arrayOf(
         "max-connection-per-server", connectionsPerServer.toString(),
         "split", connectionsPerServer.toString(),
         "max-download-limit", downloadLimitBytesPerSecond.toString(),
-    )
+    ) + listOfNotNull(
+        referrer?.let { arrayOf("referer", it) },
+        userAgent?.let { arrayOf("user-agent", it) },
+    ).flatMap { it.toList() }.toTypedArray()
 }
 
 data class EngineRequest(

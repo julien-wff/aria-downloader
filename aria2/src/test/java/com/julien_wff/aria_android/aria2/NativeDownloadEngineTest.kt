@@ -61,6 +61,39 @@ class NativeDownloadEngineTest {
         } finally { engine.close(); root.deleteRecursively() }
     }
 
+    @Test fun requestHeadersSurviveCheckpointAndCanBeCleared() = runBlocking {
+        val root = Files.createTempDirectory("aria-headers-test").toFile()
+        val backend = FakeNative()
+        val engine = engine(root, backend)
+        try {
+            engine.start()
+            val options = EngineOptions(referrer = "https://example.org/page", userAgent = "Custom/1.0")
+            val id = engine.add(EngineRequest("https://example.org/file", options = options))
+            engine.checkpoint()
+            assertEquals(options.referrer, backend.additions.last()["referer"])
+            assertEquals(options.userAgent, backend.additions.last()["user-agent"])
+            engine.updateOptions(id, EngineOptions())
+            assertFalse(backend.additions.last().containsKey("referer"))
+            assertFalse(backend.additions.last().containsKey("user-agent"))
+        } finally { engine.close(); root.deleteRecursively() }
+    }
+
+    @Test fun requestHeadersAreOptionalAndValidated() {
+        val defaults = EngineOptions().nativePairs().toList()
+        assertFalse(defaults.contains("referer"))
+        assertFalse(defaults.contains("user-agent"))
+        val pairs = EngineOptions(referrer = "https://example.org/page?q=1", userAgent = "Custom/1.0")
+            .nativePairs().toList().chunked(2).associate { it[0] to it[1] }
+        assertEquals("https://example.org/page?q=1", pairs["referer"])
+        assertEquals("Custom/1.0", pairs["user-agent"])
+        for (value in listOf("ftp://example.org", "https://user:pass@example.org", "relative", "https://example.org/\r\nInjected: yes")) {
+            assertThrows(IllegalArgumentException::class.java) { EngineOptions(referrer = value) }
+        }
+        for (value in listOf("", "Agent\r\nInjected: yes", "Agent\u0000")) {
+            assertThrows(IllegalArgumentException::class.java) { EngineOptions(userAgent = value) }
+        }
+    }
+
     @Test fun rejectsUnsafeInputsAndUnboundedOptions() {
         for (url in listOf("file:///tmp/a", "magnet:?xt=a", "https://user:secret@example.org/a", "https:/missing")) {
             assertThrows(IllegalArgumentException::class.java) { EngineRequest(url) }

@@ -64,6 +64,8 @@ internal data class TransferRecord(
     @ColumnInfo(defaultValue = "NULL") val failure: String? = null,
     @ColumnInfo(defaultValue = "3") val batchConcurrency: Int = 3,
     @ColumnInfo(defaultValue = "0") val batchWifiOnly: Boolean = false,
+    @ColumnInfo(defaultValue = "NULL") val referrer: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val userAgent: String? = null,
 )
 
 internal interface TransferStore {
@@ -239,17 +241,18 @@ class DownloadController internal constructor(
     }
 
     /** Validates the review form without creating a task or requesting execution. */
-    fun validateRequest(url: String, fileName: String) {
-        EngineRequest(url.trim(), fileName.trim())
+    fun validateRequest(url: String, fileName: String, options: DownloadRequestOptions = DownloadRequestOptions()) {
+        EngineRequest(url.trim(), fileName.trim(), EngineOptions(referrer = options.referrer, userAgent = options.userAgent))
     }
 
     /** Adds a task while visible. The scheduler authorizes the captured runnable queue as a batch. */
-    suspend fun enqueue(url: String, fileName: String = "download", settings: DownloadSettings = DownloadSettings()): String = afterReady {
-        val request = EngineRequest(url.trim(), fileName.trim(), EngineOptions(settings.connections, settings.speedLimit))
+    suspend fun enqueue(url: String, fileName: String = "download", settings: DownloadSettings = DownloadSettings(),
+        options: DownloadRequestOptions = DownloadRequestOptions()): String = afterReady {
+        val request = EngineRequest(url.trim(), fileName.trim(), EngineOptions(settings.connections, settings.speedLimit, options.referrer, options.userAgent))
         val next = TransferRecord("", request.url, request.fileName, DesiredState.RUNNING, DownloadStatus.SCHEDULED,
             taskId = UUID.randomUUID().toString().replace("-", "").take(16),
             createdAt = maxOf(System.currentTimeMillis(), (records.values.maxOfOrNull { it.createdAt } ?: 0) + 1),
-            connections = settings.connections, speedLimit = settings.speedLimit)
+            connections = settings.connections, speedLimit = settings.speedLimit, referrer = options.referrer, userAgent = options.userAgent)
         save(next)
         replaceBatch(settings)
         next.id
@@ -301,9 +304,9 @@ class DownloadController internal constructor(
         val request = afterReady {
             val current = records.getValue(id)
             check(current.status in setOf(DownloadStatus.FAILED, DownloadStatus.CANCELED))
-            current.url to current.fileName
+            Triple(current.url, current.fileName, DownloadRequestOptions(current.referrer, current.userAgent))
         }
-        return enqueue(request.first, request.second, settings)
+        return enqueue(request.first, request.second, settings, request.third)
     }
 
     suspend fun retrySavingTask(id: String) {
@@ -367,7 +370,7 @@ class DownloadController internal constructor(
             val existing = registered[current.id]
             if (existing == null) {
                 registered[current.id] = engine.add(EngineRequest(current.url, current.fileName,
-                    EngineOptions(current.connections, current.speedLimit), EngineTaskId(current.taskId!!)))
+                    EngineOptions(current.connections, current.speedLimit, current.referrer, current.userAgent), EngineTaskId(current.taskId!!)))
             } else {
                 // Completion can race a visible batch replacement while the snapshot collector
                 // waits for this lock. A completed native task cannot be resumed.

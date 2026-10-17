@@ -20,7 +20,7 @@ class QueuePersistenceTest {
         val root = File(context.cacheDir, "migration-${System.nanoTime()}").apply { mkdirs() }
         val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }
         try {
-            // Exact v1 table and identity, independent of the generated v2 schema.
+            // Exact v1 table and identity, independent of the generated current schema.
             SQLiteDatabase.openOrCreateDatabase(File(root, "transfers.db"), null).use { db ->
                 db.execSQL("CREATE TABLE transfers (token TEXT NOT NULL, url TEXT NOT NULL, fileName TEXT NOT NULL, desired TEXT NOT NULL, status TEXT NOT NULL, id TEXT NOT NULL PRIMARY KEY, taskId TEXT, completedBytes INTEGER NOT NULL, totalBytes INTEGER NOT NULL, publishedUri TEXT, createdAt INTEGER NOT NULL)")
                 db.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
@@ -38,13 +38,44 @@ class QueuePersistenceTest {
                 assertEquals(3, rows.size)
                 assertEquals(listOf("id-0", "id-1", "id-2"), rows.map { it.id })
                 assertTrue(rows.all { it.connections == 4 && it.speedLimit == 0L && it.batchConcurrency == 3 && !it.batchWifiOnly })
+                assertTrue(rows.all { it.referrer == null && it.userAgent == null })
                 assertEquals(5_000_000_000L, rows.first().completedBytes)
                 assertEquals("content://downloads/1", rows.first().publishedUri)
-                val updated = rows.map { it.copy(token = "replacement", batchConcurrency = 2, batchWifiOnly = true) }
+                val updated = rows.map { it.copy(token = "replacement", batchConcurrency = 2, batchWifiOnly = true,
+                    referrer = "https://example.org/page", userAgent = "Custom/1.0") }
                 store.writeAll(updated)
                 assertEquals(updated, store.readAll())
                 store.delete("id-1")
                 assertEquals(listOf("id-0", "id-2"), store.readAll().map { it.id })
+            }
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun v2MigrationPreservesExistingOptionsAndDefaultsRequestHeaders() = runBlocking {
+        val root = File(context.cacheDir, "migration-v2-${System.nanoTime()}").apply { mkdirs() }
+        val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }
+        try {
+            SQLiteDatabase.openOrCreateDatabase(File(root, "transfers.db"), null).use { db ->
+                db.execSQL("CREATE TABLE IF NOT EXISTS `transfers` (`token` TEXT NOT NULL, `url` TEXT NOT NULL, `fileName` TEXT NOT NULL, `desired` TEXT NOT NULL, `status` TEXT NOT NULL, `id` TEXT NOT NULL, `taskId` TEXT, `completedBytes` INTEGER NOT NULL, `totalBytes` INTEGER NOT NULL, `publishedUri` TEXT, `createdAt` INTEGER NOT NULL, `connections` INTEGER NOT NULL DEFAULT 4, `speedLimit` INTEGER NOT NULL DEFAULT 0, `failure` TEXT DEFAULT NULL, `batchConcurrency` INTEGER NOT NULL DEFAULT 3, `batchWifiOnly` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+                db.execSQL("INSERT INTO room_master_table VALUES (42, 'e5cc791d14f9ac6f158745a787693475')")
+                db.execSQL("INSERT INTO transfers (token, url, fileName, desired, status, id, taskId, completedBytes, totalBytes, createdAt, connections, speedLimit) VALUES ('batch', 'https://example.org/file', 'file', 'PAUSED', 'PAUSED', 'existing', '0123456789abcdef', 123, 456, 1, 8, 1000)")
+                db.version = 2
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val row = store.readAll().single()
+                assertEquals("existing", row.id)
+                assertEquals(8, row.connections)
+                assertEquals(1000L, row.speedLimit)
+                assertEquals(123L, row.completedBytes)
+                assertNull(row.referrer)
+                assertNull(row.userAgent)
+                store.write(row.copy(referrer = "https://example.org/page", userAgent = "Custom/1.0"))
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val row = store.readAll().single()
+                assertEquals("https://example.org/page", row.referrer)
+                assertEquals("Custom/1.0", row.userAgent)
             }
         } finally { root.deleteRecursively() }
     }
