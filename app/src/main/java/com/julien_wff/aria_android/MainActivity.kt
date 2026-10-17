@@ -75,7 +75,18 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
             incoming.value = IncomingDownload(taskId = it, fileAction = intent.getStringExtra("fileAction"))
         }
     }
-    fun prepare(url: String, name: String) { pendingRequest = url to name }
+    fun prepare(url: String, name: String): Boolean {
+        pendingRequest = null
+        return try {
+            controller.validateRequest(url, name)
+            pendingRequest = url to name
+            clearError()
+            true
+        } catch (error: IllegalArgumentException) {
+            showError(error.message ?: "Check the URL and filename.")
+            false
+        }
+    }
     fun startPending(onAdded: () -> Unit) {
         val request = pendingRequest ?: return
         pendingRequest = null
@@ -89,10 +100,9 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     fun cancel(id: String) = act { controller.cancelTask(id) }
     fun retry(id: String) = act { controller.retry(id, preferences.read()) }
     fun retrySaving(id: String) = act { controller.retrySavingTask(id) }
-    fun saveSettings(value: DownloadSettings, onSaved: () -> Unit) = act(true) {
+    internal val settingsEditor = SettingsEditor(viewModelScope, preferences::read) { value ->
         preferences.save(value)
         controller.applySettings(value)
-        onSaved()
     }
     fun delete(id: String, publicFile: Boolean) = act(true) {
         val sender = files.delete(id, publicFile)

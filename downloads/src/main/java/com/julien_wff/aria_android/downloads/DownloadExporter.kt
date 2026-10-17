@@ -26,8 +26,8 @@ internal interface ExportDestination {
 internal class DownloadsDestination(private val context: Context) : ExportDestination {
     private val resolver get() = context.contentResolver
     private val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-    // An isolated namespace makes the insertion-to-database crash window discoverable, including
-    // providers that rename colliding display names. This app never replaces somebody else's file.
+    // Pending entries have a recoverable task namespace until their URI is durable in Room.
+    // Publication moves the completed file to Downloads; MediaStore resolves name collisions.
     private fun path(record: TransferRecord) = "${Environment.DIRECTORY_DOWNLOADS}/Aria/${record.id}/"
 
     override fun find(record: TransferRecord): String? = resolver.query(collection,
@@ -62,6 +62,7 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
 
     override fun publish(uri: String) {
         if (resolver.update(Uri.parse(uri), ContentValues().apply {
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/")
                 put(MediaStore.Downloads.IS_PENDING, 0)
             }, null, null) != 1) throw IOException("Unable to publish the Downloads entry")
     }

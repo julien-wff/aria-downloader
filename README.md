@@ -1,6 +1,8 @@
 # Aria Downloader
 
-Native Android download manager following [plan.md](plan.md). Milestone 4 adds
+Native Android download manager following [plan.md](plan.md). Milestone 4.5 refreshes
+the Material 3 Expressive interface, launcher icon, navigation and autosaving settings.
+Milestone 4 added
 Downloads, History, details, Settings and reviewed share intake around a concurrent
 HTTP/HTTPS queue running under a user-initiated data transfer (UIDT) job. Files first download into
 private staging; **Completed means successfully published to Downloads**.
@@ -49,15 +51,28 @@ Native builds additionally require NDK `30.0.16248370`, SDK CMake `4.1.2`,
 Python 3.12+ and host build tools. See the [native development guide](aria2/native/README.md)
 for NixOS setup, pinned sources, engine behavior and device acceptance commands.
 
-## Product UI and queue (milestone 4)
+## Product UI and queue (milestones 4 and 4.5)
 
 Downloads shows unfinished tasks with search, status filters, progress, speed and ETA.
 History retains completed, failed and canceled tasks. Select a row for details;
 wide windows show a navigation rail and the detail beside the list. The interface
-uses system dynamic colors and supports system, light and dark appearance.
+uses system dynamic colors and supports system, light and dark appearance, including
+matching system-bar contrast. Secondary screens use native back-arrow app bars.
+The Add action uses a floating button on phones, a rail button on larger windows,
+and an app-bar action in short landscape windows. Forms have a comfortable maximum
+width on tablets. Bottom navigation and the Add action hide with the keyboard visible;
+forms scroll above the IME and provide Next, Done and Search actions.
+
+The original [Aria SVG mark](docs/design/aria-icon.svg) supplies the adaptive launcher
+and themed monochrome icon. Rounded Material Symbols are bundled locally; source
+revision and licensing are recorded in [icon notes](docs/design/icons.md).
 
 Choose **Add download**, enter one absolute HTTP/HTTPS URL and a safe single
-filename, then Start. Sharing plain text to Aria opens the same review screen;
+filename, then Start. Tapping Add checks the clipboard once and prefills the first HTTP/HTTPS
+link and its decoded filename when available. Shared links and open drafts take
+precedence; clipboard intake never starts a download automatically. Invalid input
+is shown inline before any notification-permission prompt.
+Sharing plain text to Aria opens the same review screen;
 receiving an intent never starts a transfer automatically. The first Start requests
 notification permission. Denial leaves app controls available and does not prevent UIDT.
 
@@ -69,10 +84,17 @@ Task actions include pause, visible resume, cancellation with confirmation and
 Retry saving. Retry of failed/canceled transfers creates a new identity and staging
 folder; Retry saving retains its original destination and identity.
 
-Settings persist through DataStore. Connections per server default to four (1–16);
+Settings autosave quietly through DataStore, with bounded count controls and grouped
+Transfers, Network and Appearance sections. Discrete changes save immediately;
+valid speed edits save after 400 ms or on Done, focus loss or leaving Settings.
+Invalid speed drafts keep the last valid value and show inline guidance. A single
+ViewModel-owned writer preserves rapid changes across navigation/rotation and offers
+Retry after save/application failure. No Save button is required.
+
+Connections per server default to four (1–16);
 the per-download speed default is unlimited (zero bytes/s). Connection/speed
 changes apply to new tasks. Concurrency and Wi-Fi-only changes reconcile the current
-queue from the visible settings action. Wi-Fi-only requires both Wi-Fi transport
+queue when the setting changes. Wi-Fi-only requires both Wi-Fi transport
 and an unmetered network; metered Wi-Fi does not satisfy it.
 
 History offers Open and Share only after successful publication. Both grant temporary
@@ -111,11 +133,13 @@ the UI preserves them as interrupted and never guesses which old directory to us
 
 Native completion transitions through Ready to save and Saving to Downloads.
 Export creates an app-owned pending MediaStore entry, records its URI before
-copying, then publishes only after the full copy closes successfully. Each task
-gets `Downloads/Aria/<task UUID>/<filename>`, so identical names do not overwrite
-another task's file. The namespace also finds a pending entry if the process dies
-between insertion and recording its URI. A published entry is never recopied on
-retry. Automatic staging cleanup follows successful publication and its durable Room
+copying, then publishes only after the full copy closes successfully. Completed files
+appear directly in `Downloads/`. MediaStore gives colliding names unique filenames
+without replacing existing files. Pending entries temporarily use an app/task
+namespace so they can be found if the process dies between insertion and recording
+their URI. Publication moves the entry to Downloads and clears its pending flag;
+its URI is already durable before this step. Previously published files retain their
+existing location. A published entry is never recopied on retry. Automatic staging cleanup follows successful publication and its durable Room
 record; interrupted cleanup is retried on a later launch.
 
 Export temporarily requires space for both staging and the public copy. Disk-full

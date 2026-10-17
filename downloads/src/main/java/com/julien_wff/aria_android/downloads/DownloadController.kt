@@ -238,6 +238,11 @@ class DownloadController internal constructor(
         publish()
     }
 
+    /** Validates the review form without creating a task or requesting execution. */
+    fun validateRequest(url: String, fileName: String) {
+        EngineRequest(url.trim(), fileName.trim())
+    }
+
     /** Adds a task while visible. The scheduler authorizes the captured runnable queue as a batch. */
     suspend fun enqueue(url: String, fileName: String = "download", settings: DownloadSettings = DownloadSettings()): String = afterReady {
         val request = EngineRequest(url.trim(), fileName.trim(), EngineOptions(settings.connections, settings.speedLimit))

@@ -1,5 +1,112 @@
 # Development progress
 
+## 2026-10-17 - Stable settings autosave layout
+
+- Removed the transient saving row that inserted and removed space above the form
+  on every preference update. Routine saves are silent; loading and actionable save
+  errors still appear.
+- Removed the conditional appearance-chip icon so selection no longer changes chip
+  widths or causes adjacent choices to move or wrap.
+- Added a device regression with deliberately suspended saves. It verifies identical
+  control bounds before, during and after saving, including appearance selection.
+- Build, lint, all 10 app JVM tests and the new device regression passed on Samsung
+  SM-S948B, Android 17/API 37:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest :app:connectedDebugAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.class=com.julien_wff.aria_android.SettingsLayoutTest
+  ```
+
+## 2026-10-17 - Milestone 4.5 clipboard and Downloads refinements
+
+- Removed the persistent settings save-success message; automatic saving and
+  loading/saving/error feedback remain.
+- Completed MediaStore files now publish directly into Downloads. A pending entry
+  retains its recoverable task namespace until its URI is durable; publication moves
+  it to Downloads while clearing IS_PENDING. Existing published files keep their
+  location. Name collisions receive distinct filenames without replacing content.
+- Tapping Add checks the clipboard once for an HTTP/HTTPS link and fills the URL
+  and decoded, safe URL-path filename. Rotation and shared links preserve their own
+  drafts, and no download starts until Start is pressed.
+- Build, lint, instrumentation compilation and all 56 JVM tests passed with:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest :app:assembleDebugAndroidTest
+  ```
+
+- All 12 storage device tests passed, including direct-Downloads paths, same-name
+  collision protection, pending-insertion recovery and post-publication retry.
+- The combined device command (`:app:connectedDebugAndroidTest
+  :downloads:connectedDebugAndroidTest` alongside build/lint/JVM tasks) failed two
+  app cases on the locked phone: clipboard intake returned no data and the IME did
+  not open. Six other app cases passed. The final clipboard test now checks for an
+  unlocked device before changing the clipboard and restores its original contents.
+  Clipboard and keyboard checks await an unlocked-device rerun; they are not claimed
+  as passed for this refinement.
+
+## 2026-10-17 - Milestone 4.5 interface overhaul
+
+Status: milestone 4.5 implemented and verified on API 37.
+The user authorized milestone 4.5 with Material 3 Expressive styling, dynamic
+colors and bounded settings controls.
+
+### Implemented
+
+- Reworked all product screens with consistent typography, rounded grouped
+  surfaces, iconography, search/filter treatment, empty states and transfer actions.
+  Phone secondary screens use back-arrow app bars. Navigation rail layouts put Add
+  in the rail, or in the app bar in short landscape windows; tablet forms are capped
+  at 640 dp. System-bar contrast follows the selected light/dark appearance.
+- Designed the original A/download SVG mark and matching adaptive/monochrome
+  launcher resources. Bundled selected Material Symbols Rounded vectors from a
+  pinned upstream revision with Apache 2.0 attribution in `docs/design`.
+- Replaced explicit settings saves with bounded count controls and a serialized,
+  ViewModel-owned writer. Discrete changes save immediately; valid speed edits
+  debounce for 400 ms and flush on Done, focus loss or navigation. Invalid drafts
+  preserve the last valid value. Failed saves/applications retain drafts with Retry;
+  rapid changes cannot be dropped by the exclusive-action busy guard.
+- Corrected content/IME inset consumption, hid phone navigation/Add during keyboard
+  input, and added Next/Done/Search actions. Forms scroll above the keyboard and
+  retain drafts across Activity recreation. Invalid Add input is validated through
+  the existing engine request rules before asking for notification permission;
+  validation itself never persists or schedules work.
+- Preserved queue/recovery/export behavior and publication-dependent completed-file
+  actions. Failed saving is explicitly labeled as unsuccessful public publication.
+
+### Verification
+
+- This final command passed build, lint, all 53 JVM tests (7 app settings,
+  40 downloads, 6 native) and all 7 app device tests:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest :app:connectedDebugAndroidTest
+  ```
+
+- The 12 storage/notification device tests and 6 default native device tests also
+  passed during this milestone's module runs on Samsung SM-S948B, Android 17/API 37:
+  25 device tests passed across the verified suites. The opt-in 4 GiB test was excluded.
+  Lint reports dependency-update warnings; pinned compiler/toolchain versions remain
+  aligned. No lint errors remain.
+- App tests cover native toolbar/system Back, share intake without automatic start,
+  pause/resume/cancellation, automatic settings persistence, invalid drafts, Activity
+  recreation, actual IME visibility, hidden phone navigation, focus traversal and
+  reachable form actions. The background-download test still verifies publication
+  and the public file hash.
+- Local Compose overrides exercise landscape (700 × 360 dp), tablet (1000 × 800 dp)
+  and 150% text with RTL (360 × 740 dp). Review captures covered light/dark settings,
+  forms and adaptive navigation; the landscape review prompted the compact Add action.
+  These overrides do not change the physical device's display configuration.
+  A final direct instrumentation run with `captureUi=true` passed both the responsive
+  and keyboard/recreation scenarios. Final screenshots confirmed a reachable Start
+  button above the IME, hidden phone navigation, no landscape FAB overlap and
+  centered tablet forms.
+- Android 15/API 35, a physical tablet, launcher themed-icon appearance, full TalkBack
+  review and real notification-denial/MediaStore-consent dialogs remain manual checks.
+  The earlier process-kill harness, 16 KiB runtime and 4 GiB transfer were not rerun
+  for this UI milestone.
+
 ## 2026-10-17 - Core product UI and concurrent queue
 
 Status: milestone 4 implemented and verified on API 37, including two-transfer

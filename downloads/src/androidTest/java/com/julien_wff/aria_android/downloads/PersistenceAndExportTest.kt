@@ -2,6 +2,8 @@ package com.julien_wff.aria_android.downloads
 
 import android.content.ContextWrapper
 import android.net.Uri
+import android.provider.MediaStore
+import android.os.Environment
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -57,7 +59,7 @@ class PersistenceAndExportTest {
     @Test fun mediaStorePendingInsertionAndPublishedCommitWindowsRecoverWithoutDuplicates() = runBlocking {
         val root = File(context.cacheDir, "media-test-${System.nanoTime()}").apply { mkdirs() }
         val destination = DownloadsDestination(context)
-        val record = TransferRecord("lease", "https://example.org/file", "collision.bin",
+        val record = TransferRecord("lease", "https://example.org/file", "collision-${System.nanoTime()}.bin",
             DesiredState.RUNNING, DownloadStatus.STAGED, taskId = "0123456789abcdef",
             completedBytes = 600_000, totalBytes = 600_000)
         val source = File(root, "${record.taskId}/${record.fileName}")
@@ -84,15 +86,28 @@ class PersistenceAndExportTest {
             assertEquals(inserted, saved.publishedUri)
             val completed = exporter.export(saved, { saved = it }, { _, _ -> }, { true })
             assertEquals(inserted, completed.publishedUri)
-            assertEquals(inserted, destination.find(record))
+            assertNull(destination.find(record)) // Publication moved it out of the pending namespace.
             assertFalse(source.exists())
             val actual = context.contentResolver.openInputStream(Uri.parse(inserted))!!.use { it.readBytes() }
             assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(expected),
                 MessageDigest.getInstance("SHA-256").digest(actual))
             // A second task with the same filename gets its own destination, never a replacement.
-            other = destination.create(record.copy(id = java.util.UUID.randomUUID().toString()))
+            val second = record.copy(id = java.util.UUID.randomUUID().toString())
+            other = destination.create(second)
+            destination.output(other).use { it.write(byteArrayOf(9, 8, 7)) }
+            destination.publish(other)
             assertNotEquals(inserted, other)
             assertEquals(true, destination.isPublished(inserted))
+            assertEquals(true, destination.isPublished(other))
+            fun publicName(uri: String): String = context.contentResolver.query(Uri.parse(uri),
+                arrayOf(MediaStore.Downloads.RELATIVE_PATH, MediaStore.Downloads.DISPLAY_NAME), null, null, null)!!.use {
+                assertTrue(it.moveToFirst())
+                assertEquals("${Environment.DIRECTORY_DOWNLOADS}/", it.getString(0))
+                it.getString(1)
+            }
+            assertNotEquals(publicName(inserted), publicName(other))
+            val originalAfterCollision = context.contentResolver.openInputStream(Uri.parse(inserted))!!.use { it.readBytes() }
+            assertArrayEquals(expected, originalAfterCollision)
         } finally {
             (saved.publishedUri ?: destination.find(record))?.let {
                 context.contentResolver.delete(Uri.parse(it), null, null)

@@ -52,6 +52,20 @@ class DownloadControllerTest {
         suspend fun start() = controller.start("https://example.com/file", "file.bin")
     }
 
+    @Test fun formValidationNeverPersistsOrSchedulesWork() = runTest {
+        val f = Fixture(this)
+        runCurrent()
+        f.events.clear()
+        f.controller.validateRequest(" https://example.org/a ", " a.bin ")
+        for ((url, name) in listOf("ftp://example.org/a" to "a.bin", "https://example.org/a" to "../a")) {
+            try { f.controller.validateRequest(url, name); fail("Invalid input accepted") }
+            catch (_: IllegalArgumentException) { }
+        }
+        assertTrue(f.events.isEmpty())
+        assertEquals(0, f.engine.adds)
+        assertTrue(f.controller.tasks.value.isEmpty())
+    }
+
     @Test fun persistsBeforeSchedulingAndWaitsForJobAuthorization() = runTest {
         val f = Fixture(this)
         f.start()

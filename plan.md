@@ -313,7 +313,13 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 4 (core product UI) is the current implementation milestone.
+Milestone 4.5 (native interface overhaul) is the current implementation milestone.
+The user authorized the interface refresh after milestone 4, with Material 3
+Expressive styling, dynamic colors and bounded autosaving settings controls.
+Settings save without a persistent success banner. New Add forms prefill HTTP/HTTPS
+clipboard links and safe URL filenames; shared links and open drafts take precedence.
+New completed files publish directly into Downloads, with recoverable pending entries
+and collision-safe filenames.
 The user authorized advancement after milestone 3 verification.
 The user explicitly authorized advancing without waiting for remaining milestone 2
 acceptance gates. Outstanding checks remain unverified; build, lint and relevant
@@ -334,6 +340,7 @@ See README.md for behavior, verification commands and acceptance status.
 | 2. Background vertical slice | One task running through UIDT with notification     | Transfer continues with Activity closed and screen locked; pause works from notification             |
 | 3. Persistence and storage   | Room, checkpoints, Downloads export                 | Process kill recovers; interrupted export creates no duplicate; disk-full preserves recoverable data |
 | 4. Core product UI           | Add flow, queue, details, history, settings         | Complete HTTP/HTTPS workflow through native UI                                                       |
+| 4.5. Interface overhaul      | Expressive UI, icons, autosave, keyboard handling   | Native app bars/navigation, accessible controls, persistent autosave and usable IME layouts          |
 | 5. Reliability hardening     | Retry policies, network constraints, diagnostics    | Wi-Fi/mobile transitions, notification denial, reboot and user stop behave predictably               |
 | 6. Advanced protocols        | Torrents, magnets, Metalink                         | Metadata transitions, file selection, cancellation and export recover correctly                      |
 | 7. Release                   | Signed APK, CI build, licenses and source materials | Clean install runs without downloading extra executable components                                   |

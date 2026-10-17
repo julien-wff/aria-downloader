@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="Aria: A with a download arrow">
+  <rect width="108" height="108" rx="26" fill="#006B62"/>
+  <g fill="none" stroke="#E3FFF6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34,69 L50,35 Q54,28 58,35 L74,69" stroke-width="7"/>
+    <path d="M54,49 L54,72 M45,63 L54,72 L63,63" stroke-width="6"/>
+  </g>
+</svg>
