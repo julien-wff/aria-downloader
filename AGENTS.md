@@ -17,5 +17,6 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-The native engine is currently exercised through tests and is not wired into the
-application UI. Do not present placeholder UI as a working download feature.
+Milestone 2 wires one HTTP/HTTPS task through the UI and a UIDT job. Completed
+files remain in private staging; Room recovery and public Downloads export are
+not implemented. Do not present staged completion as a publicly saved file.

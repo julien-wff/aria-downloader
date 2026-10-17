@@ -1,7 +1,8 @@
 # Embedded engine development
 
-This is milestone 1 in `plan.md`. `:aria2` packages an in-process engine; the
-application still has no download UI or background execution authorization.
+This documents the milestone 1 engine in `plan.md`. `:aria2` packages an
+in-process engine; milestone 2's `:downloads` coordinator now supplies UIDT
+execution authorization for the application's single-download controls.
 
 ## Build
 
@@ -63,7 +64,7 @@ binary download, SFTP dependency or host shared library is required at runtime.
 ## Engine contract
 
 Create `NativeDownloadEngine(context)`, call `start()`, then `add(EngineRequest)`.
-Collect immutable `snapshots`. The caller must later provide Android execution
+Collect immutable `snapshots`. The caller must provide Android execution
 authorization; instantiating this class alone does not grant background runtime.
 
 - A single dedicated thread owns all native operations. Only one engine may be

@@ -313,6 +313,15 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
+Milestone 2 (background vertical slice) is implemented, with automated acceptance
+verified on an API 37 phone (screen-off transfer, notification Pause/Cancel,
+explicit Resume, and final content hash). The application
+has single-download controls, a UIDT coordinator and system progress notifications
+(ProgressStyle on API 36+, standard progress on API 35). Completion currently means
+private staging. The single durable intent record deliberately does not implement
+milestone 3's Room recovery or public Downloads export. See README.md for behavior,
+test commands and remaining device acceptance checks.
+
 | Milestone                    | Deliverable                                         | Acceptance gate                                                                                      |
 |------------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------|
 | 1. Native feasibility        | Reproducible libaria2 build and JNI bridge          | HTTPS download, pause/resume, large file, valid TLS, 16 KB compatibility                             |
