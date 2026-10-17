@@ -16,6 +16,37 @@ class QueuePersistenceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
 
+    @Test fun v4MigrationAndFileReviewJournalSurviveDatabaseReopening() = runBlocking {
+        val root = File(context.cacheDir, "migration-v4-${System.nanoTime()}").apply { mkdirs() }
+        val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }
+        try {
+            SQLiteDatabase.openOrCreateDatabase(File(root, "transfers.db"), null).use { db ->
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `transfers` (`token` TEXT NOT NULL, `url` TEXT NOT NULL, `fileName` TEXT NOT NULL, `desired` TEXT NOT NULL, `status` TEXT NOT NULL, `id` TEXT NOT NULL, `taskId` TEXT, `completedBytes` INTEGER NOT NULL, `totalBytes` INTEGER NOT NULL, `publishedUri` TEXT, `createdAt` INTEGER NOT NULL, `connections` INTEGER NOT NULL DEFAULT 4, `speedLimit` INTEGER NOT NULL DEFAULT 0, `failure` TEXT DEFAULT NULL, `batchConcurrency` INTEGER NOT NULL DEFAULT 3, `batchWifiOnly` INTEGER NOT NULL DEFAULT 0, `referrer` TEXT DEFAULT NULL, `userAgent` TEXT DEFAULT NULL, `retryCount` INTEGER NOT NULL DEFAULT 0, `retryAt` INTEGER NOT NULL DEFAULT 0, `failureCategory` TEXT DEFAULT NULL, `engineCode` INTEGER DEFAULT NULL, `stopReason` INTEGER DEFAULT NULL, PRIMARY KEY(`id`))""")
+                db.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+                db.execSQL("INSERT INTO room_master_table VALUES (42, 'ad3a792c5f6524f394cf3c5d2d4d8f28')")
+                db.execSQL("INSERT INTO transfers (token, url, fileName, desired, status, id, taskId, completedBytes, totalBytes, createdAt, retryCount, retryAt) VALUES ('batch', 'https://example.org/a', 'a', 'PAUSED', 'PAUSED', 'old', '0123456789abcdef', 5, 10, 1, 2, 123)")
+                db.version = 4
+            }
+            val files = listOf(DownloadFile(1, "folder/a", 5_000_000_000L, 123, publishedUri = "content://downloads/7", published = true),
+                DownloadFile(2, "folder/b", 10, selected = false))
+            RoomTransferStore(wrapped).use { store ->
+                val old = store.readAll().single()
+                assertEquals(DownloadProtocol.HTTP, old.protocol)
+                assertTrue(old.files.isEmpty())
+                assertFalse(old.selectionConfirmed)
+                assertEquals(2, old.retryCount)
+                assertEquals(123L, old.retryAt)
+                store.write(old.copy(protocol = DownloadProtocol.TORRENT, status = DownloadStatus.AWAITING_SELECTION, files = files))
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val restored = store.readAll().single()
+                assertEquals(DownloadProtocol.TORRENT, restored.protocol)
+                assertEquals(DownloadStatus.AWAITING_SELECTION, restored.status)
+                assertEquals(files, restored.files)
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun v1MigrationRetainsAllRowsAndAddsQueueDefaults() = runBlocking {
         val root = File(context.cacheDir, "migration-${System.nanoTime()}").apply { mkdirs() }
         val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }

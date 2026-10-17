@@ -9,6 +9,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.julien_wff.aria_android.downloads.DownloadProtocol
+import com.julien_wff.aria_android.downloads.downloadProtocol
+import com.julien_wff.aria_android.downloads.MetadataImports
 import com.julien_wff.aria_android.downloads.DownloadRequestOptions
 import com.julien_wff.aria_android.downloads.DownloadFiles
 import com.julien_wff.aria_android.downloads.DownloadRuntime
@@ -40,7 +43,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class IncomingDownload(val text: String? = null, val taskId: String? = null, val fileAction: String? = null)
+data class IncomingDownload(val text: String? = null, val taskId: String? = null, val fileAction: String? = null, val protocol: DownloadProtocol? = null)
 
 class DownloadsViewModel(application: Application) : AndroidViewModel(application) {
     private val controller = DownloadRuntime.controller(application)
@@ -60,7 +63,7 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     val deletionConsent = MutableStateFlow<android.content.IntentSender?>(null)
     private var pendingDeletion: Pair<String, Boolean>? = null
     var askedNotificationPermission = false
-    private data class PendingRequest(val url: String, val name: String, val options: DownloadRequestOptions)
+    private data class PendingRequest(val url: String, val name: String, val options: DownloadRequestOptions, val protocol: DownloadProtocol)
     private var pendingRequest: PendingRequest? = null
 
     init {
@@ -71,18 +74,27 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun receive(intent: Intent) {
-        if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+        val shared = if (intent.action == Intent.ACTION_SEND) intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java) else null
+        val document = shared ?: if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == "content") intent.data else null
+        if (document != null) {
+            act(true) {
+                val imported = withContext(Dispatchers.IO) { MetadataImports(getApplication()).copy(document, intent.type) }
+                incoming.value = IncomingDownload(text = imported.first, protocol = imported.second)
+            }
+        } else if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == "magnet") {
+            incoming.value = IncomingDownload(text = intent.dataString)
+        } else if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             incoming.value = IncomingDownload(text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().trim())
         } else intent.getStringExtra("taskId")?.let {
             incoming.value = IncomingDownload(taskId = it, fileAction = intent.getStringExtra("fileAction"))
         }
     }
-    fun prepare(url: String, name: String, referrer: String = "", userAgent: String = ""): Boolean {
+    fun prepare(url: String, name: String, referrer: String = "", userAgent: String = "", protocol: DownloadProtocol = downloadProtocol(url)): Boolean {
         pendingRequest = null
         return try {
             val options = DownloadRequestOptions.fromInput(referrer, userAgent)
-            controller.validateRequest(url, name, options)
-            pendingRequest = PendingRequest(url, name, options)
+            controller.validateRequest(url, name, options, protocol)
+            pendingRequest = PendingRequest(url, name, options, protocol)
             clearError()
             true
         } catch (error: IllegalArgumentException) {
@@ -94,10 +106,11 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
         val request = pendingRequest ?: return
         pendingRequest = null
         act(true) {
-            controller.enqueue(request.url, request.name, preferences.read(), request.options)
+            controller.enqueue(request.url, request.name, preferences.read(), request.options, request.protocol)
             onAdded()
         }
     }
+    fun startSelected(id: String, indexes: List<Int>) = act(true) { controller.startSelectedFiles(id, indexes, preferences.read()) }
     fun pause(id: String) = act { controller.pauseTask(id) }
     fun resume(id: String) = act { controller.resumeTask(id, preferences.read()) }
     fun cancel(id: String) = act { controller.cancelTask(id) }
@@ -121,8 +134,8 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
         if (approved && pending != null) delete(pending.first, pending.second)
         else if (!approved) showError("File deletion was declined. The history entry was kept.")
     }
-    fun open(task: DownloadTask, share: Boolean, launch: (Intent) -> Unit) = act {
-        val intent = withContext(Dispatchers.IO) { files.intent(task, share) }
+    fun open(task: DownloadTask, share: Boolean, fileIndex: Int? = null, launch: (Intent) -> Unit) = act {
+        val intent = withContext(Dispatchers.IO) { files.intent(task, share, fileIndex) }
         launch(intent)
     }
     fun clearError() { mutableError.value = null }

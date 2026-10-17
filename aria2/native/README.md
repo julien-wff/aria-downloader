@@ -1,7 +1,7 @@
 # Embedded engine development
 
-This documents the milestone 1 engine in `plan.md`. `:aria2` packages an
-in-process engine; milestone 4's `:downloads` coordinator supplies UIDT
+This documents the embedded engine in `plan.md`. `:aria2` packages an
+in-process engine; the `:downloads` coordinator supplies UIDT
 batch authorization and FIFO admission for concurrent downloads. Configure native
 concurrency (1–6, default 3) only while the engine is stopped.
 
@@ -58,9 +58,12 @@ different host environments is not yet an acceptance claim.
 OpenSSL, c-ares, Expat and zlib are static PIC dependencies of `libaria2.so`.
 `libaria_jni.so` and the NDK's `libc++_shared.so` are packaged beside it. Both ABIs
 target Android 35. HTTP/HTTPS, compression, async DNS, BitTorrent and Metalink
-are compiled in. Torrent/Metalink intake and automatic metadata following are
-disabled in the initial Kotlin interface. No RPC listener, DHT listener, external
-binary download, SFTP dependency or host shared library is required at runtime.
+are compiled in. Milestone 6 adds typed torrent/magnet and Metalink intake with
+bounded offline metadata validation and explicit file selection. Automatic metadata
+following remains disabled. Torrent peer discovery enables DHT and peer exchange;
+local peer discovery and post-download seeding remain disabled. No RPC listener,
+external binary download, SFTP dependency or host shared library is required.
+See [advanced protocols](../../docs/advanced-protocols.md) for intake and recovery.
 
 ## Engine contract
 
@@ -75,31 +78,36 @@ authorization; instantiating this class alone does not grant background runtime.
   between sessions.
 - `start()` and `stop()` are idempotent. `stop()` pauses remaining runnable tasks
   and releases process ownership. `close()` additionally releases the owner
-  thread permanently. Other operations require a started engine.
+  thread permanently. File selection and cancellation of an offline review task
+  also work after the coordinator stops the engine; transfer operations require start.
 - Task IDs remain stable within the instance. Each task gets a private directory
   under `noBackupFilesDir/aria2` (partial data and session URLs stay out of backup)
-  and a fixed caller-validated filename; metadata cannot choose an output path.
-  Options expose connection count and download speed limits only. Zero means no
-  speed limit. URL credentials, non-HTTP(S) intake and unsafe filenames are rejected.
-- `remove()` cancels work without deleting staged files. `:downloads` will own
-  deletion and public export. Completion here means a staged file is complete.
+  and caller-validated HTTP filenames or validated protocol-relative paths.
+  Options expose bounded connection counts, speed limits, HTTP referrer and User-Agent.
+  Zero means no speed limit. URL credentials and unsafe metadata paths are rejected.
+  Metalink children use deterministic per-file GIDs and sequential admission within
+  their parent slot. Torrent metadata retrieval cannot start payload downloads.
+- `remove()` cancels work without deleting staged files. `:downloads` owns
+  deletion and public export. Engine completion means selected staged files are
+  verified; public completion belongs to the downloads coordinator.
 - Native execution ends when all tasks are paused or terminal. Explicit resume
   reconstructs the session and uses the existing control files. Requests and
-  task intent remain in memory; process-death reconciliation is a later milestone.
+  task intent are reconstructed from Room, retained metadata and stable staging
+  identities after process death.
 - `checkpoint()` finalizes and reconstructs the session to flush control files
   and native session metadata. This briefly reconnects active transfers.
   Pause/removal checkpoints and changes to an active task's connection count can
   likewise reconnect other active transfers in this initial engine implementation.
   Native checkpoints also run every five seconds. The native session file is
-  diagnostic/resume metadata, not a replacement for future Room intent records;
+  private resume metadata, not a replacement for Room intent records;
   it is never blindly loaded at startup.
 - System CA anchors come from AndroidCAStore's `system:` aliases and are exported
   into a private PEM bundle at each session creation. User-installed CAs are not
   trusted. Certificate and hostname checks stay enabled. Test-only CA injection
   is internal and is not a production option.
 - DNS servers are taken from the current Android network when creating a session.
-  Network changes during a session require checkpoint/restart for refresh; full
-  network-policy coordination belongs to later milestones. Private DNS/VPN DNS
+  The UIDT coordinator binds the assigned network and checkpoints/restarts on changes
+  to refresh the session and DNS. Private DNS/VPN DNS
   routing is not yet validated. Native errors expose codes and generic messages,
   not URLs, headers or native exception text.
 

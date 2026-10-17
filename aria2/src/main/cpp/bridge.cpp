@@ -130,6 +130,65 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(add)(JNIEnv* env, jobject, jstring 
     });
 }
 
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(addMirrors)(JNIEnv* env, jobject, jstring id,
+                                                       jobjectArray urls, jobjectArray options) {
+    guarded(env, [&] {
+        requireSession();
+        auto opts = pairs(env, options);
+        opts.emplace_back("gid", text(env, id));
+        std::vector<std::string> uris;
+        for (jsize i = 0; i < env->GetArrayLength(urls); ++i) {
+            auto value = static_cast<jstring>(env->GetObjectArrayElement(urls, i));
+            uris.push_back(text(env, value)); env->DeleteLocalRef(value);
+        }
+        aria2::A2Gid assigned;
+        checked(aria2::addUri(session, &assigned, uris, opts));
+    });
+}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(addTorrent)(JNIEnv* env, jobject, jstring id,
+                                                         jstring path, jobjectArray options) {
+    guarded(env, [&] {
+        requireSession();
+        auto opts = pairs(env, options);
+        opts.emplace_back("gid", text(env, id));
+        aria2::A2Gid assigned;
+        checked(aria2::addTorrent(session, &assigned, text(env, path), opts));
+    });
+}
+extern "C" JNIEXPORT jobjectArray JNICALL JNI_METHOD(files)(JNIEnv* env, jobject, jstring id) {
+    jobjectArray result = nullptr;
+    guarded(env, [&] {
+        requireSession();
+        std::unique_ptr<aria2::DownloadHandle, decltype(&aria2::deleteDownloadHandle)> handle(
+            aria2::getDownloadHandle(session, aria2::hexToGid(text(env, id))), aria2::deleteDownloadHandle);
+        if (!handle) throw std::runtime_error("unknown task");
+        auto files = handle->getFiles();
+        jclass stringType = env->FindClass("java/lang/String");
+        result = env->NewObjectArray(files.size() * 4, stringType, nullptr);
+        if (!result) { env->DeleteLocalRef(stringType); return; }
+        auto constructor = env->GetMethodID(stringType, "<init>", "([BLjava/lang/String;)V");
+        auto charset = env->NewStringUTF("UTF-8");
+        if (!constructor || !charset) { env->DeleteLocalRef(stringType); return; }
+        size_t index = 0;
+        for (const auto& file : files) {
+            for (const auto& value : {std::to_string(file.index), file.path,
+                    std::to_string(file.length), std::to_string(file.completedLength)}) {
+                auto bytes = env->NewByteArray(value.size());
+                if (!bytes) return;
+                env->SetByteArrayRegion(bytes, 0, value.size(), reinterpret_cast<const jbyte*>(value.data()));
+                auto item = env->NewObject(stringType, constructor, bytes, charset);
+                env->DeleteLocalRef(bytes);
+                if (!item) return;
+                env->SetObjectArrayElement(result, index++, item);
+                env->DeleteLocalRef(item);
+            }
+        }
+        env->DeleteLocalRef(charset);
+        env->DeleteLocalRef(stringType);
+    });
+    return result;
+}
+
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(pause)(JNIEnv* env, jobject, jstring id) {
     guarded(env, [&] { requireSession(); checked(aria2::pauseDownload(session, aria2::hexToGid(text(env, id)), true)); });
 }

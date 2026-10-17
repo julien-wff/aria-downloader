@@ -7,6 +7,7 @@ import com.julien_wff.aria_android.aria2.EngineTaskState
 import java.util.UUID
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import com.julien_wff.aria_android.aria2.EngineSourceKind
 import com.julien_wff.aria_android.aria2.EngineOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -22,7 +23,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 enum class DownloadStatus {
-    IDLE, SCHEDULED, DOWNLOADING, WAITING, PAUSED, STAGED, EXPORTING, SAVE_FAILED, COMPLETED, FAILED, CANCELED, INTERRUPTED,
+    IDLE, SCHEDULED, DOWNLOADING, WAITING, PAUSED, STAGED, EXPORTING, SAVE_FAILED, COMPLETED, FAILED, CANCELED, INTERRUPTED, METADATA, AWAITING_SELECTION, VERIFYING,
 }
 
 data class DownloadState(
@@ -44,11 +45,11 @@ data class DownloadState(
         DownloadStatus.IDLE, DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED,
     )
     val canPause: Boolean get() = status in setOf(
-        DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING,
+        DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING, DownloadStatus.METADATA,
     )
     val canResume: Boolean get() = status in setOf(DownloadStatus.PAUSED, DownloadStatus.WAITING)
     val canRetrySaving: Boolean get() = status in setOf(DownloadStatus.STAGED, DownloadStatus.SAVE_FAILED)
-    val canCancel: Boolean get() = !canStart && status != DownloadStatus.EXPORTING
+    val canCancel: Boolean get() = !canStart && status !in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)
 }
 
 internal enum class DesiredState { RUNNING, PAUSED, CANCELED }
@@ -77,6 +78,9 @@ internal data class TransferRecord(
     @ColumnInfo(defaultValue = "NULL") val failureCategory: String? = null,
     @ColumnInfo(defaultValue = "NULL") val engineCode: Int? = null,
     @ColumnInfo(defaultValue = "NULL") val stopReason: Int? = null,
+    @ColumnInfo(defaultValue = "'HTTP'") val protocol: DownloadProtocol = DownloadProtocol.HTTP,
+    @ColumnInfo(defaultValue = "0") val selectionConfirmed: Boolean = false,
+    @ColumnInfo(defaultValue = "''") val files: List<DownloadFile> = emptyList(),
 )
 
 internal interface TransferStore {
@@ -109,6 +113,8 @@ data class DownloadTask(
     val createdAt: Long,
     val connections: Int,
     val speedLimit: Long,
+    val protocol: DownloadProtocol = DownloadProtocol.HTTP,
+    val files: List<DownloadFile> = emptyList(),
 ) {
     val isHistory get() = state.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED)
 }
@@ -165,7 +171,7 @@ class DownloadController internal constructor(
                         val status = when {
                             record.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.CANCELED, DownloadStatus.FAILED) -> record.status
                             record.taskId == null -> DownloadStatus.INTERRUPTED
-                            record.status == DownloadStatus.EXPORTING -> DownloadStatus.SAVE_FAILED
+                            record.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING) -> DownloadStatus.SAVE_FAILED
                             record.status in runnable -> if (record.desired == DesiredState.PAUSED) DownloadStatus.PAUSED else DownloadStatus.WAITING
                             else -> record.status
                         }
@@ -207,15 +213,32 @@ class DownloadController internal constructor(
                                 EngineTaskState.QUEUED -> DownloadStatus.SCHEDULED
                                 EngineTaskState.COMPLETED -> DownloadStatus.STAGED
                                 EngineTaskState.FAILED -> DownloadStatus.FAILED
+                                EngineTaskState.METADATA -> DownloadStatus.METADATA
+                                EngineTaskState.AWAITING_SELECTION -> DownloadStatus.AWAITING_SELECTION
                                 else -> continue
                             }
-                            if (status == DownloadStatus.FAILED) {
-                                save(failed(current.copy(completedBytes = task.completedBytes,
-                                    totalBytes = task.totalBytes), task.errorCode))
+                            val updatedFiles = if (task.files.isEmpty()) current.files else task.files.map { file ->
+                                val saved = current.files.find { it.index == file.index }
+                                DownloadFile(file.index, file.path, file.length, file.completedBytes,
+                                    if (current.selectionConfirmed) saved?.selected ?: file.selected else file.supported,
+                                    file.supported, saved?.publishedUri, saved?.published ?: false)
+                            }
+                            if (status == DownloadStatus.AWAITING_SELECTION) {
+                                save(current.copy(status = status, desired = DesiredState.PAUSED, token = "", files = updatedFiles, selectionConfirmed = false,
+                                    completedBytes = 0, totalBytes = updatedFiles.filter { it.supported }.sumOf { it.size },
+                                    failure = "Review files, then choose Start selected files. No payload is downloading."))
                                 active.remove(id)
                                 continue
                             }
-                            val next = current.copy(status = status, completedBytes = task.completedBytes,
+                            if (status == DownloadStatus.FAILED) {
+                                val failed = failed(current.copy(completedBytes = task.completedBytes,
+                                    totalBytes = task.totalBytes), task.errorCode)
+                                save(if (current.protocol != DownloadProtocol.HTTP && task.errorCode == null)
+                                    failed.copy(failure = "Metadata is invalid, unsafe, too large or unsupported. Check the source and select supported files.") else failed)
+                                active.remove(id)
+                                continue
+                            }
+                            val next = current.copy(status = status, files = updatedFiles, completedBytes = task.completedBytes,
                                 totalBytes = task.totalBytes, failure = null)
                             val terminal = status in setOf(DownloadStatus.STAGED, DownloadStatus.FAILED)
                             val now = System.nanoTime()
@@ -257,10 +280,12 @@ class DownloadController internal constructor(
     private fun publish() {
         mutableTasks.value = records.values.sortedByDescending { it.createdAt }.map { record ->
             val source = runCatching {
+                if (record.protocol == DownloadProtocol.MAGNET) return@runCatching "Magnet link"
+                if (record.url.startsWith("file:")) return@runCatching "Shared metadata file"
                 val uri = java.net.URI(record.url)
                 java.net.URI(uri.scheme, null, uri.host, uri.port, uri.path, null, null).toString()
             }.getOrDefault("Source unavailable")
-            DownloadTask(record.id, source, views.getValue(record.id), record.createdAt, record.connections, record.speedLimit)
+            DownloadTask(record.id, source, views.getValue(record.id), record.createdAt, record.connections, record.speedLimit, record.protocol, record.files)
         }
         mutableState.value = mutableTasks.value.firstOrNull()?.state ?: DownloadState()
     }
@@ -273,18 +298,20 @@ class DownloadController internal constructor(
     }
 
     /** Validates the review form without creating a task or requesting execution. */
-    fun validateRequest(url: String, fileName: String, options: DownloadRequestOptions = DownloadRequestOptions()) {
-        EngineRequest(url.trim(), fileName.trim(), EngineOptions(referrer = options.referrer, userAgent = options.userAgent))
+    fun validateRequest(url: String, fileName: String, options: DownloadRequestOptions = DownloadRequestOptions(), protocol: DownloadProtocol = downloadProtocol(url)) {
+        EngineRequest(url.trim(), fileName.trim(), EngineOptions(referrer = options.referrer, userAgent = options.userAgent),
+            kind = EngineSourceKind.valueOf(protocol.name))
     }
 
     /** Adds a task while visible. The scheduler authorizes the captured runnable queue as a batch. */
     suspend fun enqueue(url: String, fileName: String = "download", settings: DownloadSettings = DownloadSettings(),
-        options: DownloadRequestOptions = DownloadRequestOptions()): String = afterReady {
-        val request = EngineRequest(url.trim(), fileName.trim(), EngineOptions(settings.connections, settings.speedLimit, options.referrer, options.userAgent))
+        options: DownloadRequestOptions = DownloadRequestOptions(), protocol: DownloadProtocol = downloadProtocol(url)): String = afterReady {
+        val request = EngineRequest(url.trim(), fileName.trim(), EngineOptions(settings.connections, settings.speedLimit, options.referrer, options.userAgent),
+            kind = EngineSourceKind.valueOf(protocol.name))
         val next = TransferRecord("", request.url, request.fileName, DesiredState.RUNNING, DownloadStatus.SCHEDULED,
             taskId = UUID.randomUUID().toString().replace("-", "").take(16),
             createdAt = maxOf(System.currentTimeMillis(), (records.values.maxOfOrNull { it.createdAt } ?: 0) + 1),
-            connections = settings.connections, speedLimit = settings.speedLimit, referrer = options.referrer, userAgent = options.userAgent)
+            connections = settings.connections, speedLimit = settings.speedLimit, referrer = options.referrer, userAgent = options.userAgent, protocol = protocol)
         save(next)
         replaceBatch(settings)
         next.id
@@ -305,6 +332,20 @@ class DownloadController internal constructor(
     }
     suspend fun resume() = resumeTask(latestId())
 
+    suspend fun startSelectedFiles(id: String, indexes: List<Int>, settings: DownloadSettings = DownloadSettings()) = afterReady {
+        val current = records.getValue(id)
+        check(current.status == DownloadStatus.AWAITING_SELECTION && !current.selectionConfirmed)
+        require(indexes.isNotEmpty() && indexes.distinct().size == indexes.size &&
+            indexes.all { index -> current.files.any { it.index == index && it.supported } }) { "Select at least one supported file." }
+        val next = current.copy(selectionConfirmed = true, files = current.files.map { it.copy(selected = it.index in indexes) },
+            desired = DesiredState.RUNNING, status = DownloadStatus.SCHEDULED, failure = null,
+            completedBytes = 0, totalBytes = current.files.filter { it.index in indexes }.sumOf { it.size })
+        save(next) // Commit selection before changing the engine request or requesting execution.
+        try { registered[id]?.let { engine.selectFiles(it, indexes) } }
+        catch (error: Exception) { save(current); throw error }
+        replaceBatch(settings)
+    }
+
     suspend fun pauseTask(id: String, expectedToken: String? = null) = afterReady {
         val current = records.getValue(id)
         if (expectedToken != null && current.token != expectedToken) return@afterReady
@@ -322,7 +363,7 @@ class DownloadController internal constructor(
         if (expectedToken != null && current.token != expectedToken) return@afterReady
         if (!views.getValue(id).canCancel) return@afterReady
         save(current.copy(desired = DesiredState.CANCELED, status = DownloadStatus.CANCELED, retryAt = 0, failure = null))
-        if (active.remove(id)) try { registered[id]?.let { engine.remove(it) } }
+        if (active.remove(id) || current.status == DownloadStatus.AWAITING_SELECTION) try { registered[id]?.let { engine.remove(it) } }
         catch (error: Exception) { lease?.let { interrupt(it, "Unable to cancel safely. Resume the remaining queue.") }; throw error }
         lease?.let { drain(it); finishIfIdle(it) }
         if (lease == null) { scheduler.cancel(); stopEngine() }
@@ -336,9 +377,9 @@ class DownloadController internal constructor(
         val request = afterReady {
             val current = records.getValue(id)
             check(current.status in setOf(DownloadStatus.FAILED, DownloadStatus.CANCELED))
-            Triple(current.url, current.fileName, DownloadRequestOptions(current.referrer, current.userAgent))
+            current
         }
-        return enqueue(request.first, request.second, settings, request.third)
+        return enqueue(request.url, request.fileName, settings, DownloadRequestOptions(request.referrer, request.userAgent), request.protocol)
     }
 
     suspend fun retrySavingTask(id: String) {
@@ -358,6 +399,7 @@ class DownloadController internal constructor(
         records.remove(id); views.remove(id); registered.remove(id)
         publish()
     }
+    internal suspend fun sourceReferenced(source: String): Boolean = afterReady { records.values.any { it.url == source } }
     internal suspend fun recordForDeletion(id: String): TransferRecord = afterReady { records.getValue(id) }
 
     suspend fun applySettings(settings: DownloadSettings) = afterReady {
@@ -402,17 +444,28 @@ class DownloadController internal constructor(
             val existing = registered[current.id]
             if (existing == null) {
                 registered[current.id] = engine.add(EngineRequest(current.url, current.fileName,
-                    EngineOptions(current.connections, current.speedLimit, current.referrer, current.userAgent), EngineTaskId(current.taskId!!)))
+                    EngineOptions(current.connections, current.speedLimit, current.referrer, current.userAgent), EngineTaskId(current.taskId!!),
+                    EngineSourceKind.valueOf(current.protocol.name), current.files.filter { it.selected }.map { it.index }.takeIf { current.selectionConfirmed }))
             } else {
                 // Completion can race a visible batch replacement while the snapshot collector
                 // waits for this lock. A completed native task cannot be resumed.
                 val snapshot = engine.snapshots.value.tasks.find { it.id == existing }
+                if (snapshot?.state == EngineTaskState.AWAITING_SELECTION) {
+                    val files = snapshot.files.map { DownloadFile(it.index, it.path, it.length, selected = it.supported, supported = it.supported) }
+                    save(current.copy(status = DownloadStatus.AWAITING_SELECTION, desired = DesiredState.PAUSED, token = "", files = files, selectionConfirmed = false,
+                        completedBytes = 0, totalBytes = files.filter { it.supported }.sumOf { it.size },
+                        failure = "Review files, then choose Start selected files. No payload is downloading."))
+                    continue
+                }
                 if (snapshot?.state in setOf(EngineTaskState.COMPLETED, EngineTaskState.FAILED)) {
                     val completed = snapshot!!.state == EngineTaskState.COMPLETED
                     if (!completed && current.retryAt > 0) {
                         engine.restart(existing)
                     } else {
-                        val next = current.copy(completedBytes = snapshot.completedBytes, totalBytes = snapshot.totalBytes)
+                        val next = current.copy(completedBytes = snapshot.completedBytes, totalBytes = snapshot.totalBytes,
+                            files = if (snapshot.files.isEmpty()) current.files else snapshot.files.map { file ->
+                                DownloadFile(file.index, file.path, file.length, file.completedBytes, file.selected, file.supported)
+                            })
                         save(if (completed) next.copy(status = DownloadStatus.STAGED, failure = null)
                             else failed(next, snapshot.errorCode))
                         if (completed) launchExport(current.id, execution)
@@ -612,6 +665,6 @@ class DownloadController internal constructor(
         }
     }
     private companion object {
-        val runnable = setOf(DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING)
+        val runnable = setOf(DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING, DownloadStatus.METADATA)
     }
 }

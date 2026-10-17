@@ -1,6 +1,8 @@
 # Reliability acceptance
 
-Milestone 5 retains HTTP/HTTPS scope. Completion means a published MediaStore file,
+Milestone 5 established HTTP/HTTPS reliability; milestone 6 extends those safeguards
+with protocol metadata review and per-file journals (see [advanced protocols](advanced-protocols.md)).
+Completion means all selected files are published through MediaStore,
 not just finished network transfer or staged bytes. See PROGRESS.md for executed
 checks and remaining device coverage.
 

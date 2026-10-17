@@ -18,6 +18,50 @@ import org.junit.runner.RunWith
 class PersistenceAndExportTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+    @Test fun multiFilePublicationRecoversPerFileJournalAndPreservesRelativeFolders() = runBlocking {
+        val root = File(context.cacheDir, "multi-media-${System.nanoTime()}").apply { mkdirs() }
+        val destination = DownloadsDestination(context)
+        val files = listOf(DownloadFile(1, "bundle/a.bin", 3, 3), DownloadFile(2, "bundle/nested/b.bin", 2, 2),
+            DownloadFile(3, "bundle/excluded.bin", 1, selected = false))
+        var saved = TransferRecord("lease", "https://example.org/source.torrent", "Bundle", DesiredState.RUNNING,
+            DownloadStatus.STAGED, taskId = "0123456789abcdef", completedBytes = 5, totalBytes = 5,
+            protocol = DownloadProtocol.TORRENT, selectionConfirmed = true, files = files)
+        try {
+            files.filter { it.selected }.forEach { file -> File(root, "${saved.taskId}/${file.path}").apply {
+                parentFile!!.mkdirs(); writeBytes(ByteArray(file.size.toInt()) { file.index.toByte() })
+            } }
+            val exporter = DownloadExporter(root, destination)
+            try {
+                exporter.export(saved, { next ->
+                    if (next.files.count { it.published } == 2) throw IOException("Lost commit after second publication")
+                    saved = next
+                }, { _, _ -> }, { true })
+                fail("Expected interrupted save")
+            } catch (_: IOException) { }
+            assertEquals(DownloadStatus.EXPORTING, saved.status)
+            assertTrue(File(root, saved.taskId!!).exists())
+            val before = saved.files.filter { it.selected }.map { it.publishedUri }
+            exporter.export(saved, { saved = it }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, saved.status)
+            assertEquals(before, saved.files.filter { it.selected }.map { it.publishedUri })
+            assertFalse(File(root, saved.taskId!!).exists())
+            for (file in saved.files.filter { it.selected }) {
+                val uri = Uri.parse(file.publishedUri)
+                assertEquals(true, destination.isPublished(uri.toString()))
+                context.contentResolver.query(uri, arrayOf(MediaStore.Downloads.RELATIVE_PATH), null, null, null)!!.use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals("${Environment.DIRECTORY_DOWNLOADS}/Aria-${saved.id}/${file.path.substringBeforeLast('/')}/", it.getString(0))
+                }
+                assertArrayEquals(ByteArray(file.size.toInt()) { file.index.toByte() },
+                    context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+            }
+            assertNull(saved.files.last().publishedUri)
+        } finally {
+            saved.files.mapNotNull { it.publishedUri }.forEach { context.contentResolver.delete(Uri.parse(it), null, null) }
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun roomReopensWithStableMappingProgressIntentAndExportIdentity() = runBlocking {
         val root = File(context.cacheDir, "room-test-${System.nanoTime()}").apply { mkdirs() }
         val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }

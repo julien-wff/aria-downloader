@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DownloadIntakeTest {
+    @Test fun magnetClipboardIntakeRetainsHashButDoesNotUseItAsFilename() {
+        val magnet = "magnet:?xt=urn:btih:${"a".repeat(40)}&dn=Private"
+        val draft = clipboardDraft("Link: $magnet")!!
+        assertEquals(magnet, draft.url)
+        assertEquals("Magnet download", draft.fileName)
+        assertNull(clipboardDraft("magnet:?dn=missing-hash"))
+    }
+
     @Test fun findsWebLinkInClipboardAndUsesDecodedPathName() {
         val draft = clipboardDraft("Here is the file: <https://example.org/files/my%20report+v2.pdf?token=secret#section>")!!
         assertEquals("https://example.org/files/my%20report+v2.pdf?token=secret#section", draft.url)

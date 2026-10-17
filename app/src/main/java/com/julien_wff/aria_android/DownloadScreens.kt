@@ -65,6 +65,8 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     var adding by rememberSaveable { mutableStateOf(false) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var url by rememberSaveable { mutableStateOf("") }
+    var protocol by rememberSaveable { mutableStateOf(DownloadProtocol.HTTP) }
+    var protocolChosen by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("download") }
     var referrer by rememberSaveable { mutableStateOf("") }
     var userAgent by rememberSaveable { mutableStateOf("") }
@@ -87,7 +89,8 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
             referrer = ""; userAgent = ""; advancedExpanded = false
             model.clearError()
             url = request.text
-            name = suggestedName(request.text)
+            protocol = request.protocol ?: downloadProtocol(request.text); protocolChosen = false
+            name = if (request.text.startsWith("file:")) "Shared ${protocol.name.lowercase()}" else if (protocol == DownloadProtocol.MAGNET) "Magnet download" else suggestedName(request.text)
             adding = true
             model.incoming.value = null
         } else if (request.taskId != null) {
@@ -95,7 +98,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
             val task = tasks.find { it.id == request.taskId }
             if (task != null) {
                 destination = if (task.isHistory) "History" else "Downloads"
-                request.fileAction?.let { open(task, it == "share") }
+                request.fileAction?.let { if (it == "share" || task.files.count { f -> f.selected } <= 1) open(task, it == "share") }
                 model.incoming.value = null
             } else if (loaded) {
                 model.showError("This download is no longer available.")
@@ -140,7 +143,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                 }.getOrNull()
                 focus.clearFocus(); model.clearError(); selected = null
                 referrer = ""; userAgent = ""; advancedExpanded = false
-                url = draft?.url.orEmpty(); name = draft?.fileName ?: "download"; adding = true
+                url = draft?.url.orEmpty(); protocol = downloadProtocol(url); protocolChosen = false; name = draft?.fileName ?: "download"; adding = true
             }
             Scaffold(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -188,13 +191,13 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                             }) { Text("Settings") }
                         }
                         when {
-                            adding -> AddDownload(url, { url = it; model.clearError() }, name, { name = it; model.clearError() }, busy,
-                                error = error,
+                            adding -> AddDownload(url, { url = it; if (!protocolChosen) protocol = downloadProtocol(it); model.clearError() }, name, { name = it; model.clearError() }, busy,
+                                error = error, protocol = protocol, onProtocol = { protocol = it; protocolChosen = true },
                                 referrer = referrer, onReferrer = { referrer = it; model.clearError() },
                                 userAgent = userAgent, onUserAgent = { userAgent = it; model.clearError() },
                                 advancedExpanded = advancedExpanded, onAdvancedExpanded = { advancedExpanded = it }, start = {
                                     focus.clearFocus()
-                                    if (model.prepare(url, name, referrer, userAgent)) {
+                                    if (model.prepare(url, name, referrer, userAgent, protocol)) {
                                         if (!model.askedNotificationPermission && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                             model.askedNotificationPermission = true
                                             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -207,12 +210,12 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                                 val actions: @Composable (DownloadTask) -> Unit = { item -> TaskActions(item, model, open,
                                     cancel = { cancelId = item.id }, delete = { deleteId = item.id; deletePublic = false }) }
                                 if (secondary) {
-                                    if (task != null) TaskDetails(task, actions) else Notice(R.drawable.ic_description, "This download is no longer available.")
+                                    if (task != null) TaskDetails(task, model, actions) else Notice(R.drawable.ic_description, "This download is no longer available.")
                                 } else Row(Modifier.weight(1f)) {
                                     TaskList(destination, tasks, selected, { focus.clearFocus(); selected = it }, actions, Modifier.weight(1f))
                                     if (wide && task != null) {
                                         VerticalDivider(Modifier.fillMaxHeight().padding(horizontal = 16.dp))
-                                        Box(Modifier.weight(1f)) { TaskDetails(task, actions) }
+                                        Box(Modifier.weight(1f)) { TaskDetails(task, model, actions) }
                                     }
                                 }
                             }
@@ -230,8 +233,8 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
             AlertDialog(onDismissRequest = { deleteId = null }, title = { Text("Delete download entry?") },
                 text = { Column {
                     Text("Remove this entry and its private staging data.")
-                    if (task?.state?.publishedUri != null) Row(Modifier.fillMaxWidth().clickable { deletePublic = !deletePublic }) {
-                        Checkbox(deletePublic, { deletePublic = it }); Text("Also delete the file from Downloads", Modifier.padding(top = 12.dp))
+                    if (task?.state?.publishedUri != null || task?.files?.any { it.publishedUri != null } == true) Row(Modifier.fillMaxWidth().clickable { deletePublic = !deletePublic }) {
+                        Checkbox(deletePublic, { deletePublic = it }); Text(if (task?.files?.count { it.selected }?.let { it > 1 } == true) "Also delete the files from Downloads" else "Also delete the file from Downloads", Modifier.padding(top = 12.dp))
                     } else Text("Public Downloads files are kept.")
                 } },
                 confirmButton = { TextButton(enabled = !busy, onClick = { model.delete(deleteId!!, deletePublic); deleteId = null }) { Text("Delete") } },
@@ -275,17 +278,26 @@ private fun Section(title: String, icon: Int, content: @Composable ColumnScope.(
 
 @Composable
 private fun AddDownload(url: String, onUrl: (String) -> Unit, name: String, onName: (String) -> Unit,
-    busy: Boolean, error: String?, referrer: String, onReferrer: (String) -> Unit,
+    busy: Boolean, error: String?, protocol: DownloadProtocol, onProtocol: (DownloadProtocol) -> Unit, referrer: String, onReferrer: (String) -> Unit,
     userAgent: String, onUserAgent: (String) -> Unit, advancedExpanded: Boolean,
     onAdvancedExpanded: (Boolean) -> Unit, start: () -> Unit) {
     val focus = LocalFocusManager.current
     Column(Modifier.widthIn(max = 640.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Section("File to download", R.drawable.ic_link) {
-            OutlinedTextField(url, onUrl, label = { Text("HTTP or HTTPS URL") }, modifier = Modifier.fillMaxWidth(),
+            if (url.startsWith("file:")) {
+                Text("Shared ${protocol.name.lowercase()} file · Review before starting")
+            } else {
+            OutlinedTextField(url, onUrl, label = { Text(if (protocol == DownloadProtocol.MAGNET) "Magnet link" else "HTTP or HTTPS URL") }, modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { AriaIcon(R.drawable.ic_link) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }), singleLine = true)
-            OutlinedTextField(name, onName, label = { Text("Filename") }, modifier = Modifier.fillMaxWidth(),
+            }
+            if (!url.startsWith("file:")) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DownloadProtocol.entries.forEach { kind -> FilterChip(protocol == kind, { onProtocol(kind) },
+                    label = { Text(when (kind) { DownloadProtocol.HTTP -> "HTTP"; DownloadProtocol.TORRENT -> "Torrent"; DownloadProtocol.MAGNET -> "Magnet"; DownloadProtocol.METALINK -> "Metalink" }) }) }
+            }
+            if (protocol != DownloadProtocol.HTTP) Text("Resolve metadata, review files, then start the selected contents. Torrents upload to peers while downloading and stop when finished.", style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(name, onName, label = { Text(if (protocol == DownloadProtocol.HTTP) "Filename" else "Download title") }, modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { AriaIcon(R.drawable.ic_description) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), singleLine = true)
@@ -323,7 +335,7 @@ private fun AddDownload(url: String, onUrl: (String) -> Unit, name: String, onNa
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             AriaIcon(R.drawable.ic_download)
             Spacer(Modifier.width(8.dp))
-            Text(if (busy) "Starting…" else "Start download")
+            Text(if (busy) "Starting…" else if (protocol == DownloadProtocol.HTTP) "Start download" else "Review files")
         }
     }
 }
@@ -341,7 +353,7 @@ private fun TaskList(destination: String, tasks: List<DownloadTask>, selected: S
         "Canceled" -> it.state.status == DownloadStatus.CANCELED
         "Running" -> it.state.canPause
         "Paused" -> it.state.status == DownloadStatus.PAUSED
-        "Saving" -> it.state.status in setOf(DownloadStatus.STAGED, DownloadStatus.EXPORTING, DownloadStatus.SAVE_FAILED)
+        "Saving" -> it.state.status in setOf(DownloadStatus.STAGED, DownloadStatus.EXPORTING, DownloadStatus.SAVE_FAILED, DownloadStatus.VERIFYING)
         else -> true
     } }.let { if (history) it else it.sortedBy { task -> task.createdAt } }
     val context = LocalContext.current
@@ -388,7 +400,7 @@ private fun TaskList(destination: String, tasks: List<DownloadTask>, selected: S
 }
 
 @Composable
-private fun TaskDetails(task: DownloadTask, actions: @Composable (DownloadTask) -> Unit) {
+private fun TaskDetails(task: DownloadTask, model: DownloadsViewModel, actions: @Composable (DownloadTask) -> Unit) {
     val context = LocalContext.current
     var report by rememberSaveable(task.id) { mutableStateOf<String?>(null) }
     report?.let { text ->
@@ -407,6 +419,7 @@ private fun TaskDetails(task: DownloadTask, actions: @Composable (DownloadTask) 
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(task.state.fileName, style = MaterialTheme.typography.headlineMedium)
         Section("Transfer", R.drawable.ic_download) { TaskProgress(task.state); actions(task) }
+        if (task.files.isNotEmpty()) FileReview(task, model)
         Section("Source", R.drawable.ic_link) { SelectionContainer { Text(task.source, style = MaterialTheme.typography.bodyMedium) } }
         Section("Configuration", R.drawable.ic_tune) {
             Text("${task.connections} connections per server")
@@ -430,9 +443,9 @@ private fun TaskProgress(state: DownloadState) {
     val context = LocalContext.current
     Text(statusLabel(state.status), style = MaterialTheme.typography.labelLarge,
         color = if (state.status in setOf(DownloadStatus.FAILED, DownloadStatus.SAVE_FAILED)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-    if (state.canPause || state.status == DownloadStatus.EXPORTING) {
-        val total = if (state.status == DownloadStatus.EXPORTING) state.completedBytes else state.totalBytes
-        val completed = if (state.status == DownloadStatus.EXPORTING) state.savedBytes else state.completedBytes
+    if (state.canPause || state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)) {
+        val total = if (state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)) state.completedBytes else state.totalBytes
+        val completed = if (state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)) state.savedBytes else state.completedBytes
         if (total > 0) LinearProgressIndicator(progress = { (completed.toDouble() / total).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
         else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
     }
@@ -461,11 +474,11 @@ private fun TaskActions(task: DownloadTask, model: DownloadsViewModel, open: (Do
         if (task.state.canResume) Action("Resume", R.drawable.ic_play_arrow) { model.resume(task.id) }
         if (task.state.canRetrySaving) Action("Retry saving", R.drawable.ic_refresh) { model.retrySaving(task.id) }
         if (task.state.status == DownloadStatus.COMPLETED) {
-            Action("Open", R.drawable.ic_open_in_new) { open(task, false) }
+            if (task.files.count { it.selected } <= 1) Action("Open", R.drawable.ic_open_in_new) { open(task, false) }
             IconButton(onClick = { open(task, true) }) { AriaIcon(R.drawable.ic_share, "Share") }
         }
         if (task.state.status in setOf(DownloadStatus.FAILED, DownloadStatus.CANCELED)) Action("Retry", R.drawable.ic_refresh) { model.retry(task.id) }
-        if (task.state.status != DownloadStatus.EXPORTING) Box {
+        if (task.state.status !in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)) Box {
             IconButton(onClick = { expanded = true }) { AriaIcon(R.drawable.ic_more_vert, "More") }
             DropdownMenu(expanded, { expanded = false }) {
                 if (task.state.canCancel) DropdownMenuItem(text = { Text("Cancel download") }, leadingIcon = { AriaIcon(R.drawable.ic_cancel) }, onClick = { expanded = false; cancel() })
@@ -553,4 +566,43 @@ internal fun statusLabel(status: DownloadStatus): String = when (status) {
     DownloadStatus.FAILED -> "Failed"
     DownloadStatus.CANCELED -> "Canceled"
     DownloadStatus.INTERRUPTED -> "Interrupted"
+    DownloadStatus.VERIFYING -> "Verifying staged files…"
+    DownloadStatus.METADATA -> "Resolving metadata…"
+    DownloadStatus.AWAITING_SELECTION -> "Ready to select files"
+}
+
+
+@Composable
+private fun FileReview(task: DownloadTask, model: DownloadsViewModel) {
+    val context = LocalContext.current
+    val reviewing = task.state.status == DownloadStatus.AWAITING_SELECTION
+    var chosen by rememberSaveable(task.id) { mutableStateOf(task.files.filter { it.selected && it.supported }.map { it.index }.toIntArray()) }
+    val selected = chosen.toSet()
+    Section("Files", R.drawable.ic_folder) {
+        if (reviewing) {
+            Text("${selected.size} selected · ${Formatter.formatShortFileSize(context, task.files.filter { it.index in selected }.sumOf { it.size })}")
+            Row {
+                TextButton(onClick = { chosen = task.files.filter { it.supported }.map { it.index }.toIntArray() }) { Text("Select all") }
+                TextButton(onClick = { chosen = intArrayOf() }) { Text("Clear selection") }
+            }
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+            items(task.files, key = { it.index }) { file ->
+                Row(Modifier.fillMaxWidth().then(if (reviewing && file.supported) Modifier.toggleable(file.index in selected,
+                    role = Role.Checkbox, onValueChange = { checked -> chosen = if (checked) (selected + file.index).toIntArray() else (selected - file.index).toIntArray() }) else Modifier)
+                    .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (reviewing) Checkbox(file.index in selected, onCheckedChange = null, enabled = file.supported)
+                    Column(Modifier.weight(1f)) {
+                        Text(file.path, style = MaterialTheme.typography.bodyMedium)
+                        Text(if (!file.supported) "No supported HTTP/HTTPS mirror" else if (!reviewing && !file.selected) "Not selected" else
+                            Formatter.formatShortFileSize(context, file.size), style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (task.state.status == DownloadStatus.COMPLETED && file.selected && file.published) IconButton(onClick = {
+                        model.open(task, false, file.index) { context.startActivity(it) }
+                    }) { AriaIcon(R.drawable.ic_open_in_new, "Open ${file.path}") }
+                }
+            }
+        }
+        if (reviewing) Button(onClick = { model.startSelected(task.id, chosen.toList()) }, enabled = chosen.isNotEmpty()) { Text("Start selected files") }
+    }
 }

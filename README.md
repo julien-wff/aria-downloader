@@ -8,7 +8,7 @@
   A native Android download manager powered by the aria2 engine.
 </p>
 
-Aria brings reliable HTTP and HTTPS downloads to Android in a focused, modern interface. Add a link
+Aria brings reliable HTTP, HTTPS and Torrent downloads to Android in a focused, modern interface. Add a link
 or share one from another app, follow its progress, and find the published file in your device's
 Downloads folder. Transfers can keep running when you leave the app, with Android notifications for
 progress and quick controls.
@@ -16,18 +16,13 @@ progress and quick controls.
 ## What it does
 
 - Manage concurrent downloads in a persistent queue, with pause, resume, cancel and retry actions.
-- Continue user-started transfers in the background and recover interrupted work.
 - Automatically retry temporary connection/server failures up to three times, preserving partial files.
-- Preview and share a sanitized diagnostics report from download details.
+- Add magnet links, torrent/Metalink web URLs, or share metadata files from another app.
 - Review completed, failed and canceled transfers in History; open or share files after they have
   been saved.
 - Share a link into the app for review before starting a transfer.
 - Tune queue size, connection limits, speed limits, network preference and appearance.
 - Use an adaptive Material 3 interface with light and dark themes.
-
-Aria is an Android app with the download engine embedded in the application. It does not require a
-companion server or a first-launch binary download. The current interface accepts individual HTTP
-and HTTPS links.
 
 ## Recovery and diagnostics
 
@@ -86,5 +81,6 @@ Device tests require a connected Android 15 or newer device or emulator:
 ```
 
 Recovery scenarios and the device acceptance matrix are in [docs/reliability.md](docs/reliability.md).
+Protocol behavior and per-file publication are in [docs/advanced-protocols.md](docs/advanced-protocols.md).
 The project roadmap and milestone status are in [plan.md](plan.md) and
 [PROGRESS.md](PROGRESS.md).

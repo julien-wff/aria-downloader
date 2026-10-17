@@ -49,6 +49,51 @@ class DownloadExporterTest {
         return record to source
     }
 
+    @Test fun interruptedMultiFilePublicationReusesPublishedAndPendingEntries() = runBlocking {
+        val root = Files.createTempDirectory("multi-export").toFile()
+        val files = listOf(DownloadFile(1, "folder/a.bin", 3, 3), DownloadFile(2, "folder/b.bin", 2, 2))
+        var saved = TransferRecord("lease", "https://example.org/source.torrent", "Torrent", DesiredState.RUNNING,
+            DownloadStatus.STAGED, taskId = "0123456789abcdef", completedBytes = 5, totalBytes = 5,
+            protocol = DownloadProtocol.TORRENT, selectionConfirmed = true, files = files)
+        val destinations = mutableMapOf<String, String>()
+        val published = mutableSetOf<String>()
+        val writes = mutableMapOf<String, Int>()
+        var failSecond = true
+        val destination = object : ExportDestination {
+            override fun find(record: TransferRecord) = destinations[record.id]
+            override fun create(record: TransferRecord) = "content://downloads/${record.id}".also { destinations[record.id] = it }
+            override fun isPublished(uri: String): Boolean? = if (uri in destinations.values) uri in published else null
+            override fun output(uri: String): OutputStream {
+                writes[uri] = (writes[uri] ?: 0) + 1
+                if (uri.endsWith("-file-2") && failSecond) throw IOException("Disk full")
+                return ByteArrayOutputStream()
+            }
+            override fun publish(uri: String) { published += uri }
+        }
+        try {
+            files.forEach { file -> File(root, "${saved.taskId}/${file.path}").apply {
+                parentFile!!.mkdirs(); writeBytes(ByteArray(file.size.toInt()) { 7 })
+            } }
+            File(root, "${saved.taskId}/bundle.aria2").writeText("checkpoint for unselected torrent contents")
+            val exporter = DownloadExporter(root, destination)
+            try { exporter.export(saved, { saved = it }, { _, _ -> }, { true }); fail("Expected failure") } catch (_: IOException) { }
+            assertEquals(1, published.size)
+            assertEquals(DownloadStatus.EXPORTING, saved.status)
+            assertTrue(saved.files.first().published)
+            assertFalse(saved.files.last().published)
+            assertTrue(File(root, saved.taskId!!).exists())
+            val converter = ProtocolConverters()
+            assertEquals(saved.files, converter.decode(converter.encode(saved.files)))
+            failSecond = false
+            exporter.export(saved, { saved = it }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, saved.status)
+            assertEquals(2, destinations.size)
+            assertEquals(1, writes.getValue(destinations.values.first { it.endsWith("-file-1") }))
+            assertTrue(saved.files.all { it.published })
+            assertFalse(File(root, saved.taskId!!).exists())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun successfulPublicationPersistsIdentityAndCompletionBeforeDeletingStaging() = runBlocking {
         val root = Files.createTempDirectory("export-test").toFile()
         try {

@@ -1,5 +1,125 @@
 # Development progress
 
+## 2026-10-17 - Milestone 6 advanced protocols
+
+Status: milestone 6 implemented and verified on API 37. All 39 default device
+cases passed across the direct instrumentation runs recorded below.
+The user authorized the full milestone 6 plan: review files before payload transfer,
+group multi-file publication, accept links and shared files without a file picker,
+and restrict Metalink payload sources to HTTP/HTTPS mirrors.
+
+### Implemented
+
+- Added typed HTTP, torrent, magnet and Metalink requests, reviewed share/clipboard
+  intake, explicit protocol choice for ambiguous web URLs and private shared-file
+  import while its temporary URI grant is available. Imports use synced temporary
+  files and rename. Receiving a link or file never schedules a transfer.
+- Added metadata-only magnet retrieval and restartable remote metadata download.
+  Metadata completion enters durable Ready to select files, releases its queue
+  slot and fences the old authorization. Confirmed selection is committed before
+  requesting a fresh UIDT batch. Reopening alone never starts payload transfers.
+- Added bounded metadata parsing, safe relative paths, duplicate/path/checkpoint
+  collision checks, symlink and XML entity rejection, unsupported-entry handling,
+  and a conservative aggregate journal budget so Room rows remain readable through
+  Android cursor windows. Unsupported torrent variants fail without payload work.
+- Extended JNI with torrent submission, HTTP mirrors and per-file snapshots.
+  Torrent payloads retain native piece verification, stable staging and selection.
+  DHT/peer exchange support magnet discovery; private-torrent restrictions remain
+  native-controlled and post-download seeding is disabled. Metalink children use
+  deterministic IDs, sequential admission within their parent's queue slot,
+  mirror failover and supported whole-file checksums.
+- Added non-destructive Room v4→v5 migration with protocol, selection and an atomic
+  per-file publication journal. Retained bounded retries, matching execution leases,
+  network binding, checkpoints and explicit interruption recovery. File selection
+  while a sibling runs cannot refresh a nonexistent payload GID.
+- Added file review, selected totals, per-file Open and task-level multi-file Share.
+  Multi-file tasks publish under unique Downloads task folders with safe relative
+  paths. Verification, pending insertion, publication and retry saving are tracked
+  per file; already public entries are never truncated. Only publication of every
+  selected file makes the parent Completed. Selective torrent control files remain
+  valid recovery data until successful publication permits staging cleanup.
+- Retained the Expressive UI, original icon, autosaving settings, accessible controls,
+  HTTP request options and sanitized diagnostics. Updated current milestone and
+  architecture documentation in [docs/advanced-protocols.md](docs/advanced-protocols.md).
+
+### Verification
+
+- Final build, lint, all 86 JVM tests (11 app, 58 downloads, 17 native), and compilation
+  of every instrumentation APK passed:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest \
+    :app:assembleDebugAndroidTest :downloads:assembleDebugAndroidTest \
+    :aria2:assembleDebugAndroidTest
+  ```
+
+- On Samsung SM-S948B, Android 17/API 37, direct instrumentation passed all 16 storage
+  tests and all 10 UI tests. Coverage includes v4 migration, per-file insertion and
+  publication commit windows, grouped paths, payload bytes, keyboard/clipboard,
+  autosave and responsive layouts. The new shared-file test passed with notifications
+  denied and granted: no automatic start, explicit selection, Activity recreation,
+  and publication of exactly the selected file. It passed again against the final APK.
+- Both background regressions passed on the final APK (`OK (2 tests)`, 30.105 seconds):
+  actual denied-notification bounded retry/publication and notification pause/resume,
+  locked-screen progress, public-file hashes and cancellation.
+- All 11 default native tests passed on the final sources (`OK (11 tests)`, 21.184
+  seconds), excluding the opt-in 4 GiB test. This includes TLS rejection, HTTP resume,
+  torrent file selection/checkpoint reconstruction, controlled-peer magnet metadata,
+  Metalink failover/checksums and content hashes. Combined with storage/UI results,
+  all 39 default device cases passed across these runs. The final manifest-budget
+  regression passed in the JVM suite, and the shared-file publication case passed
+  again on the final APK (`OK (1 test)`, 2.043 seconds).
+- After non-streamed APK installation, the direct instrumentation commands were:
+
+  ```sh
+  adb shell am instrument -w -r \
+    com.julien_wff.aria_android.downloads.test/androidx.test.runner.AndroidJUnitRunner
+  adb shell am instrument -w -r \
+    -e notAnnotation com.julien_wff.aria_android.HostRecovery \
+    -e notClass com.julien_wff.aria_android.BackgroundDownloadTest \
+    com.julien_wff.aria_android.test/androidx.test.runner.AndroidJUnitRunner
+  adb shell am instrument -w -r \
+    -e class com.julien_wff.aria_android.BackgroundDownloadTest \
+    com.julien_wff.aria_android.test/androidx.test.runner.AndroidJUnitRunner
+  adb shell am instrument -w -r \
+    -e notClass com.julien_wff.aria_android.aria2.NativeEngineTest#fullLargeFileHash \
+    com.julien_wff.aria_android.aria2.test/androidx.test.runner.AndroidJUnitRunner
+  ```
+- Both ABI dependency checks, 16 KiB ELF alignment and APK ZIP alignment passed:
+
+  ```sh
+  python3 aria2/native/verify_apk.py --sdk "$ANDROID_HOME" \
+    --apk app/build/outputs/apk/debug/app-debug.apk
+  ```
+
+- The attempted combined Gradle command was:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest connectedDebugAndroidTest
+  ```
+
+  Wireless ADB disconnected during streamed APK installation. Gradle misleadingly
+  printed BUILD SUCCESSFUL despite runner installation errors; those checks are not
+  claimed as passed. The subsequent storage/UI Gradle retry was interrupted after
+  another stalled streamed install. Non-streamed `adb install --no-streaming -r -t`
+  succeeded, followed by direct `adb shell am instrument -w -r` runs. UI ran before
+  background tests that intentionally lock the screen. Notification denial was set
+  outside instrumentation to avoid the existing test revoking its own process's
+  permission; ordinary UI checks used their usual granted permission setup.
+- Earlier attempts exposed and corrected completed torrent per-file counters,
+  retained selective-torrent checkpoints, native HTTP resume advice and a test's
+  hard-coded public-folder spelling. The first direct UI run had three existing
+  Settings-selector failures under notification denial; the granted-permission run
+  passed all 10. Initial magnet peer-fixture handshake issues were fixed; controlled
+  torrent, magnet and Metalink native cases subsequently passed.
+- Android 15, 16 KiB runtime, physical reboot/network transitions and the opt-in
+  4 GiB transfer remain manual or earlier acceptance checks. The host SIGKILL,
+  force-stop and Task Manager harnesses were not rerun for this milestone; native
+  protocol tests reconstruct engine instances from original metadata/checkpoints.
+  These earlier checks do not block advancement and are not claimed as passed here.
+
 ## 2026-10-17 - Milestone 5 reliability hardening
 
 Status: implementation complete; device acceptance is recorded below. The user

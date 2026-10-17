@@ -21,6 +21,7 @@ internal interface ExportDestination {
     fun isPublished(uri: String): Boolean?
     fun output(uri: String): OutputStream
     fun publish(uri: String)
+    fun publish(uri: String, record: TransferRecord) = publish(uri)
 }
 
 internal class DownloadsDestination(private val context: Context) : ExportDestination {
@@ -44,7 +45,7 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
 
     override fun create(record: TransferRecord): String = resolver.insert(collection,
         ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, record.fileName)
+            put(MediaStore.Downloads.DISPLAY_NAME, record.fileName.substringAfterLast('/'))
             put(MediaStore.Downloads.MIME_TYPE, mimeForFileName(record.fileName))
             put(MediaStore.Downloads.RELATIVE_PATH, path(record))
             put(MediaStore.Downloads.IS_PENDING, 1)
@@ -60,9 +61,15 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
     override fun output(uri: String): OutputStream = resolver.openOutputStream(Uri.parse(uri), "wt")
         ?: throw IOException("Unable to write the Downloads entry")
 
-    override fun publish(uri: String) {
+    override fun publish(uri: String) = publish(uri, TransferRecord("", "", "download", DesiredState.PAUSED, DownloadStatus.EXPORTING))
+
+    override fun publish(uri: String, record: TransferRecord) {
+        val group = record.id.substringBefore("-file-")
+        val relative = if ("-file-" in record.id && record.files.size > 1)
+            "${Environment.DIRECTORY_DOWNLOADS}/Aria-$group/" + record.fileName.substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" }
+            else "${Environment.DIRECTORY_DOWNLOADS}/"
         if (resolver.update(Uri.parse(uri), ContentValues().apply {
-                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/")
+                put(MediaStore.Downloads.RELATIVE_PATH, relative)
                 put(MediaStore.Downloads.IS_PENDING, 0)
             }, null, null) != 1) throw IOException("Unable to publish the Downloads entry")
     }
@@ -80,21 +87,68 @@ internal class DownloadExporter(
     private val destination: ExportDestination,
 ) : TransferExporter {
     override suspend fun export(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
-        progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord = withContext(Dispatchers.IO) {
+        progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord {
+        if (record.files.isEmpty()) return exportOne(record, record.fileName, persist, progress, authorized)
+        var next = record.copy(status = DownloadStatus.VERIFYING)
+        persist(next)
+        val selected = record.files.filter { it.selected }
+        require(selected.isNotEmpty())
+        withContext(Dispatchers.IO) {
+            val taskId = requireNotNull(record.taskId)
+            require(taskId.matches(Regex("[0-9a-f]{16}")))
+            val directory = File(stagingRoot, taskId).canonicalFile
+            require(directory.parentFile == stagingRoot.canonicalFile)
+            for (file in selected) {
+                currentCoroutineContext().ensureActive()
+                if (!authorized()) throw IOException("Verification interrupted")
+                val source = File(directory, file.path).canonicalFile
+                require(source.path.startsWith(directory.path + File.separator))
+                // Already-public files can be reconciled even if staging cleanup had started.
+                if (file.publishedUri?.let { destination.isPublished(it) } != true)
+                    check(source.isFile && source.length() == file.size) { "Verified staged file is unavailable" }
+            }
+        }
+        var saved = 0L
+        for (file in selected) {
+            val child = record.copy(id = "${record.id}-file-${file.index}", fileName = file.path,
+                completedBytes = file.size, totalBytes = file.size, publishedUri = file.publishedUri, status = DownloadStatus.EXPORTING)
+            exportOne(child, file.path,
+                persist = { updated ->
+                    next = next.copy(status = DownloadStatus.EXPORTING, files = next.files.map { current ->
+                        if (current.index == file.index) current.copy(publishedUri = updated.publishedUri,
+                            published = updated.status == DownloadStatus.COMPLETED) else current
+                    })
+                    persist(next)
+                }, progress = { copied, _ -> progress(saved + copied, record.completedBytes) }, authorized = authorized,
+                cleanupAfter = false)
+            saved += file.size
+        }
+        next = next.copy(status = DownloadStatus.COMPLETED,
+            publishedUri = next.files.first { it.selected }.publishedUri, failure = null)
+        persist(next)
+        cleanup(next)
+        return next
+    }
+
+    private suspend fun exportOne(record: TransferRecord, sourcePath: String, persist: suspend (TransferRecord) -> Unit,
+        progress: (Long, Long) -> Unit, authorized: () -> Boolean, cleanupAfter: Boolean = true): TransferRecord = withContext(Dispatchers.IO) {
         val exportContext = currentCoroutineContext()
         val taskId = record.taskId ?: throw IOException("Legacy staging cannot be located safely")
         require(taskId.matches(Regex("[0-9a-f]{16}")))
         val directory = File(stagingRoot, taskId)
-        val source = File(directory, record.fileName)
+        val source = File(directory, sourcePath)
         check(directory.canonicalFile.parentFile == stagingRoot.canonicalFile &&
-            source.canonicalFile.parentFile == directory.canonicalFile) { "Invalid staging path" }
+            source.canonicalPath.startsWith(directory.canonicalPath + File.separator) &&
+            sourcePath.split('/').all { it.isNotEmpty() && it != "." && it != ".." && '\\' !in it && ':' !in it }) { "Invalid staging path" }
         var next = record
         val uri = record.publishedUri?.takeIf { destination.isPublished(it) != null }
             ?: destination.find(record) ?: destination.create(record)
         next = next.copy(publishedUri = uri, status = DownloadStatus.EXPORTING)
         persist(next) // Record identity before opening/truncating or publishing.
         if (destination.isPublished(uri) != true) {
-            if (!source.isFile || File(directory, "${record.fileName}.aria2").exists())
+            // Selective torrents retain a control file for their unselected contents.
+            // The durable parent completion authorizes export of its selected, verified files.
+            if (!source.isFile || (record.files.isEmpty() && File(directory, "${record.fileName}.aria2").exists()))
                 throw IOException("Completed staged data is unavailable; partial data has been preserved")
             if (source.length() != record.completedBytes)
                 throw IOException("Staged file size changed; data has been preserved")
@@ -117,11 +171,11 @@ internal class DownloadExporter(
             }
             exportContext.ensureActive()
             if (!authorized()) throw IOException("Saving interrupted; retry saving to continue")
-            destination.publish(uri)
+            destination.publish(uri, record)
         }
         next = next.copy(status = DownloadStatus.COMPLETED)
         persist(next) // Never remove staging until publication and its durable record succeed.
-        runCatching { cleanup(next) }
+        if (cleanupAfter) runCatching { cleanup(next) }
         next
     }
 
@@ -129,7 +183,7 @@ internal class DownloadExporter(
         val taskId = record.taskId
         val uri = record.publishedUri
         if (record.status == DownloadStatus.COMPLETED && taskId != null && uri != null &&
-            taskId.matches(Regex("[0-9a-f]{16}")) && destination.isPublished(uri) == true) {
+            taskId.matches(Regex("[0-9a-f]{16}")) && (if (record.files.isEmpty()) destination.isPublished(uri) == true else record.files.filter { it.selected }.all { it.published && it.publishedUri?.let(destination::isPublished) == true })) {
             val directory = File(stagingRoot, taskId)
             check(directory.canonicalFile.parentFile == stagingRoot.canonicalFile)
             directory.deleteRecursively()

@@ -33,7 +33,7 @@ internal class TransferNotifications(
     }
 
     fun build(state: DownloadState, token: String, taskId: String? = null): Notification {
-        val active = state.canPause || state.status == DownloadStatus.EXPORTING
+        val active = state.canPause || state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)
         val builder = Notification.Builder(context, if (active) ACTIVE_CHANNEL else RESULT_CHANNEL)
             .setSmallIcon(R.drawable.ic_download)
             .setContentTitle(state.fileName)
@@ -49,7 +49,7 @@ internal class TransferNotifications(
                 .setSmallIcon(R.drawable.ic_download).setContentTitle("Aria Downloader")
                 .setContentText("Download status").build())
         if (active) {
-            val saving = state.status == DownloadStatus.EXPORTING
+            val saving = state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)
             val unknown = if (saving) state.completedBytes <= 0 else state.totalBytes <= 0 || state.status != DownloadStatus.DOWNLOADING
             val progress = if (saving) progressValue(state.savedBytes, state.completedBytes)
                 else progressValue(state.completedBytes, state.totalBytes)
@@ -94,7 +94,7 @@ internal class TransferNotifications(
     }
 
     fun summary(tasks: List<DownloadTask>, token: String): Notification {
-        val active = tasks.filter { it.state.canPause || it.state.status == DownloadStatus.EXPORTING }
+        val active = tasks.filter { it.state.canPause || it.state.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING) }
         if (active.size == 1) return Notification.Builder.recoverBuilder(context,
             build(active.single().state, token, active.single().id)).setGroupSummary(true).build()
         return Notification.Builder(context, ACTIVE_CHANNEL).setSmallIcon(R.drawable.ic_download)
@@ -114,7 +114,7 @@ internal class TransferNotifications(
         // Removing a group summary also removes its children on Android. Retain a detached
         // non-ongoing summary when the last task pauses/completes so Resume/results survive.
         if (tasks.isNotEmpty() && (tasks.any { !it.isHistory } || previousStates.values.any {
-                it.canPause || it.status == DownloadStatus.EXPORTING
+                it.canPause || it.status in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)
             })) manager.notify(ID, summary(tasks, token))
         else if (tasks.isEmpty()) manager.cancel(ID)
         previousStates = tasks.associate { it.id to it.state }
@@ -142,6 +142,9 @@ internal class TransferNotifications(
     private fun description(state: DownloadState): String {
         if (state.status != DownloadStatus.DOWNLOADING) return when (state.status) {
             DownloadStatus.SCHEDULED -> "Waiting to start"
+            DownloadStatus.VERIFYING -> "Verifying staged files…"
+            DownloadStatus.METADATA -> "Resolving metadata · Contents have not started"
+            DownloadStatus.AWAITING_SELECTION -> "Review files in Aria to start downloading"
             DownloadStatus.WAITING -> state.message ?: "Waiting for network or system permission to run"
             DownloadStatus.PAUSED -> "Paused · Tap Resume to open the app"
             DownloadStatus.STAGED -> "Ready to save to Downloads"

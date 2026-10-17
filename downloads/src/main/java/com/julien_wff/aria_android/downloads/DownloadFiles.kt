@@ -14,15 +14,26 @@ import kotlinx.coroutines.withContext
 
 /** Public-file actions and private staging cleanup stay in the storage module. */
 class DownloadFiles(private val context: Context, private val controller: DownloadController) {
-    fun intent(task: DownloadTask, share: Boolean): Intent {
-        check(task.state.status == DownloadStatus.COMPLETED) { "This file has not been saved to Downloads." }
-        val uri = Uri.parse(requireNotNull(task.state.publishedUri))
+    fun intent(task: DownloadTask, share: Boolean, fileIndex: Int? = null): Intent {
+        check(task.state.status == DownloadStatus.COMPLETED) { "These files have not been saved to Downloads." }
+        val selected = task.files.filter { it.selected && (fileIndex == null || it.index == fileIndex) }
+        val uris = if (task.files.isEmpty()) listOf(Uri.parse(requireNotNull(task.state.publishedUri))) else selected.map {
+            check(it.published); Uri.parse(requireNotNull(it.publishedUri))
+        }
+        require(uris.isNotEmpty())
+        require(share || uris.size == 1) { "Choose a file from download details to open." }
         val resolver = context.contentResolver
-        resolver.openFileDescriptor(uri, "r")?.use { } ?: throw IOException("File is no longer available in Downloads.")
-        val mime = resolver.getType(uri)?.takeUnless { it == "application/octet-stream" } ?: mimeForFileName(task.state.fileName)
-        val intent = if (share) Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
-            else Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
-        intent.clipData = ClipData.newRawUri("Downloaded file", uri)
+        uris.forEach { uri -> resolver.openFileDescriptor(uri, "r")?.use { } ?: throw IOException("File is no longer available in Downloads.") }
+        val mime = if (uris.size > 1) "*/*" else resolver.getType(uris.single())?.takeUnless { it == "application/octet-stream" }
+            ?: mimeForFileName(selected.firstOrNull()?.path ?: task.state.fileName)
+        val intent = when {
+            share && uris.size > 1 -> Intent(Intent.ACTION_SEND_MULTIPLE).setType(mime).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            share -> Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uris.single())
+            else -> Intent(Intent.ACTION_VIEW).setDataAndType(uris.single(), mime)
+        }
+        intent.clipData = ClipData.newRawUri("Downloaded file", uris.first()).apply {
+            uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+        }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         return if (share) Intent.createChooser(intent, "Share download") else intent
     }
@@ -33,16 +44,18 @@ class DownloadFiles(private val context: Context, private val controller: Downlo
         val record = controller.recordForDeletion(id)
         check(record.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED))
         val consent = withContext(Dispatchers.IO) {
-            val uri = record.publishedUri ?: DownloadsDestination(context).find(record)
-            if (uri != null) {
-                val destination = DownloadsDestination(context)
+            val destination = DownloadsDestination(context)
+            val uris = if (record.files.isEmpty()) listOfNotNull(record.publishedUri ?: destination.find(record)) else
+                record.files.filter { it.selected }.mapNotNull { file -> file.publishedUri ?: destination.find(record.copy(
+                    id = "${record.id}-file-${file.index}", fileName = file.path)) }
+            for (uri in uris.distinct()) {
                 if (deletePublic || destination.isPublished(uri) == false) {
                     try { context.contentResolver.delete(Uri.parse(uri), null, null) }
                     catch (error: RecoverableSecurityException) { return@withContext error.userAction.actionIntent.intentSender }
                     catch (_: SecurityException) {
-                        return@withContext MediaStore.createDeleteRequest(context.contentResolver, listOf(Uri.parse(uri))).intentSender
+                        return@withContext MediaStore.createDeleteRequest(context.contentResolver,
+                            uris.filter { destination.isPublished(it) != null }.map(Uri::parse)).intentSender
                     }
-                    // Confirm deletion, including providers that return zero without an error.
                     if (destination.isPublished(uri) != null) throw IOException("Unable to delete the Downloads file. Entry kept.")
                 }
             }
@@ -55,7 +68,13 @@ class DownloadFiles(private val context: Context, private val controller: Downlo
             }
             null
         }
-        if (consent == null) controller.deleteTask(id)
+        if (consent == null) {
+            controller.deleteTask(id)
+            if (record.url.startsWith("file:") && !controller.sourceReferenced(record.url)) withContext(Dispatchers.IO) {
+                val imported = File(java.net.URI(record.url)).canonicalFile
+                if (imported.parentFile == File(context.noBackupFilesDir, "aria2/imports").canonicalFile) imported.delete()
+            }
+        }
         return consent
     }
 }

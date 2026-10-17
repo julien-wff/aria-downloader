@@ -313,7 +313,16 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 5 (reliability hardening) is the current implementation milestone.
+Milestone 6 (advanced protocols) is the current implementation milestone.
+The user authorized torrent/magnet links, torrent/Metalink web URLs and shared
+metadata files, without a file picker. Payload transfers require metadata review
+and explicit file selection. Metalink supports HTTP/HTTPS mirrors and supplied
+checksums; unsupported-only entries are explained. Multi-file results publish into
+unique task folders in Downloads, preserving validated relative paths. Each file
+has a durable publication journal, and task completion requires publication of all
+selected files. Torrents stop post-download seeding. See PROGRESS.md for verification.
+
+Milestone 5 (reliability hardening) is retained.
 The user authorized the full milestone with bounded automatic retries, explicit
 Resume after reboot/user stop, and previewable sanitized diagnostics reports.
 Temporary transfer errors receive three automatic retries after 5, 15 and 45 seconds,

@@ -17,9 +17,13 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 5 is current: reliability hardening, bounded automatic retries, network
-constraints, interruption recovery and previewable sanitized diagnostics. The user
-explicitly authorized implementing the milestone 5 plan. Retain milestone 4.5's
+Milestone 6 is current: torrents, magnets and HTTP/HTTPS-backed Metalink, with
+metadata review, explicit file selection and restartable per-file public export.
+The user explicitly authorized implementing the milestone 6 plan. Support links and
+shared metadata files without a file picker. Group multi-file exports into task
+folders, preserve safe relative paths, and stop post-download seeding. Retain
+milestone 5's bounded retries, network constraints, interruption recovery and
+previewable sanitized diagnostics. Retain milestone 4.5's
 Material 3 Expressive UI, original vector launcher icon, accessible controls,
 autosaving settings and keyboard-aware navigation/forms, along with the queue,
 task details, history, share-sheet intake and per-download HTTP options.

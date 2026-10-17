@@ -13,6 +13,13 @@ class NativeDownloadEngineTest {
         val states = linkedMapOf<String, LongArray>()
         val owners = mutableSetOf<Long>()
         val additions = mutableListOf<Map<String, String>>()
+        val torrentFiles = mutableMapOf<String, Array<String>>()
+        override fun addTorrent(id: String, path: String, options: Array<String>) {
+            add(id, path, options)
+            val values = options.toList().chunked(2).associate { it[0] to it[1] }
+            torrentFiles[id] = arrayOf("1", File(values.getValue("dir"), "file.bin").path, "1", "0")
+        }
+        override fun files(id: String): Array<String> = torrentFiles.getValue(id)
         var sessionOptions = emptyMap<String, String>()
         var opens = 0
         var shutdowns = 0
@@ -43,6 +50,27 @@ class NativeDownloadEngineTest {
     private fun engine(root: File, native: FakeNative) = NativeDownloadEngine(
         root, { SessionEnvironment(File(root, "ca.pem"), listOf("192.0.2.53")) }, native,
     )
+
+    @Test fun selectingOfflineMetadataWhileSiblingRunsNeverRefreshesAMissingPayloadGid() = runBlocking {
+        val root = Files.createTempDirectory("aria-selection").toFile()
+        val backend = FakeNative(); val engine = engine(root, backend)
+        try {
+            val imported = File(root, "imports/input.torrent").apply {
+                parentFile!!.mkdirs()
+                writeText("d4:infod6:lengthi1e4:name8:file.bin12:piece lengthi16384e6:pieces20:${"x".repeat(20)}ee")
+            }
+            engine.start()
+            val sibling = engine.add(EngineRequest("https://example.org/running"))
+            val id = engine.add(EngineRequest(imported.toURI().toString(), kind = EngineSourceKind.TORRENT))
+            assertEquals(EngineTaskState.AWAITING_SELECTION, engine.snapshots.value.tasks.single { it.id == id }.state)
+            engine.selectFiles(id, listOf(1))
+            engine.checkpoint()
+            assertEquals(EngineTaskState.PAUSED, engine.snapshots.value.tasks.single { it.id == id }.state)
+            engine.resume(id)
+            withTimeout(5000) { engine.snapshots.first { state -> state.tasks.any { it.id == id && it.state == EngineTaskState.DOWNLOADING } } }
+            assertEquals(EngineTaskState.DOWNLOADING, engine.snapshots.value.tasks.single { it.id == sibling }.state)
+        } finally { engine.close(); root.deleteRecursively() }
+    }
 
     @Test fun concurrencyConfigurationIsBoundedAndAppliedToEachNativeSession() = runBlocking {
         val root = Files.createTempDirectory("aria-concurrency-test").toFile()

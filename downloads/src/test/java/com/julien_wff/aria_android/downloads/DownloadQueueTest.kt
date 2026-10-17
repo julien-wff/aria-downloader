@@ -25,6 +25,7 @@ class DownloadQueueTest {
             snapshots.value = snapshots.value.copy(tasks = snapshots.value.tasks + EngineTaskSnapshot(id, EngineTaskState.DOWNLOADING))
             return id
         }
+        override suspend fun selectFiles(id: EngineTaskId, indexes: List<Int>) { emit(id, EngineTaskState.PAUSED) }
         override suspend fun pause(id: EngineTaskId) { emit(id, EngineTaskState.PAUSED) }
         override suspend fun resume(id: EngineTaskId) { resumed += id; emit(id, EngineTaskState.DOWNLOADING) }
         override suspend fun remove(id: EngineTaskId) { emit(id, EngineTaskState.REMOVED) }
@@ -76,6 +77,43 @@ class DownloadQueueTest {
         fun authorize(): ExecutionLease = ExecutionLease(token) { finished++ }.also { controller.authorize(it) }
         fun state(id: String) = controller.tasks.value.first { it.id == id }.state
         fun engineId(id: String) = EngineTaskId(saved.getValue(id).taskId!!)
+    }
+
+    @Test fun metadataReviewReleasesSlotAndRequiresExplicitSelectionAcrossRecreation() = runTest {
+        val f = Fixture(this)
+        val id = f.controller.enqueue("https://example.org/files.torrent", "Torrent", DownloadSettings(concurrency = 1))
+        f.authorize(); runCurrent()
+        assertEquals(EngineSourceKind.TORRENT, f.engine.requests.single().kind)
+        val files = listOf(EngineFile(1, "folder/a", 100), EngineFile(2, "folder/b", 200))
+        f.engine.snapshots.value = EngineSnapshot(true, listOf(EngineTaskSnapshot(f.engineId(id), EngineTaskState.AWAITING_SELECTION, files = files)))
+        runCurrent()
+        assertEquals(DownloadStatus.AWAITING_SELECTION, f.state(id).status)
+        assertEquals(DesiredState.PAUSED, f.saved.getValue(id).desired)
+        assertEquals(1, f.finished)
+        val restored = Fixture(this, f.saved.values.toList())
+        runCurrent()
+        assertEquals(0, restored.schedules)
+        assertEquals(DownloadStatus.AWAITING_SELECTION, restored.state(id).status)
+        try { restored.controller.startSelectedFiles(id, emptyList()); fail("Empty selection") } catch (_: IllegalArgumentException) { }
+        restored.controller.startSelectedFiles(id, listOf(2)); runCurrent()
+        assertEquals(1, restored.schedules)
+        restored.authorize(); runCurrent()
+        assertEquals(listOf(2), restored.engine.requests.single().selectedFiles)
+        assertEquals(listOf(false, true), restored.saved.getValue(id).files.map { it.selected })
+    }
+
+    @Test fun metadataCancellationCannotBeReactivatedByLateSnapshots() = runTest {
+        val f = Fixture(this)
+        val id = f.controller.enqueue("magnet:?xt=urn:btih:${"a".repeat(40)}", "Magnet")
+        f.authorize(); runCurrent()
+        f.engine.emit(f.engineId(id), EngineTaskState.METADATA); runCurrent()
+        assertTrue(f.state(id).canPause)
+        f.controller.cancelTask(id)
+        f.engine.snapshots.value = EngineSnapshot(true, listOf(EngineTaskSnapshot(f.engineId(id), EngineTaskState.AWAITING_SELECTION,
+            files = listOf(EngineFile(1, "a", 1)))))
+        runCurrent()
+        assertEquals(DownloadStatus.CANCELED, f.state(id).status)
+        assertEquals(DesiredState.CANCELED, f.saved.getValue(id).desired)
     }
 
     @Test fun requestOverridesSurviveAdmissionRecoveryAndRetry() = runTest {

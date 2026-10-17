@@ -15,6 +15,7 @@ interface DownloadEngine {
     suspend fun restart(id: EngineTaskId) { error("Restart is unavailable") }
     suspend fun remove(id: EngineTaskId)
     suspend fun updateOptions(id: EngineTaskId, options: EngineOptions)
+    suspend fun selectFiles(id: EngineTaskId, indexes: List<Int>) { error("File selection unavailable") }
     suspend fun checkpoint()
     suspend fun stop()
     /** Releases the owner thread. The engine cannot be restarted after this call. */
@@ -55,21 +56,38 @@ data class EngineOptions(
     ).flatMap { it.toList() }.toTypedArray()
 }
 
+enum class EngineSourceKind { HTTP, TORRENT, MAGNET, METALINK }
+
+data class EngineFile(
+    val index: Int, val path: String, val length: Long, val completedBytes: Long = 0,
+    val selected: Boolean = true, val mirrors: List<String> = emptyList(), val checksum: String? = null,
+    val supported: Boolean = true,
+)
+
 data class EngineRequest(
     val url: String,
     val fileName: String = "download",
     val options: EngineOptions = EngineOptions(),
     /** Persist before adding; reusing it restores the same private staging directory. */
     val taskId: EngineTaskId? = null,
+    val kind: EngineSourceKind = EngineSourceKind.HTTP,
+    val selectedFiles: List<Int>? = null,
+
 ) {
     init {
         require(taskId == null || taskId.value.matches(Regex("[0-9a-f]{16}"))) { "Invalid staging identity" }
         val uri = try { URI(url) } catch (_: Exception) {
             throw IllegalArgumentException("An absolute HTTP or HTTPS URL is required")
         }
-        require(uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty()) {
-            "An absolute HTTP or HTTPS URL is required"
+        if (kind == EngineSourceKind.MAGNET) {
+            require(url.startsWith("magnet:?") && Regex("(?:^|&)xt=urn:btih:(?:[a-fA-F0-9]{40}|[a-zA-Z2-7]{32})(?:&|$)").containsMatchIn(uri.rawQuery ?: url.substringAfter('?'))) {
+                "A magnet link with a supported BitTorrent v1 info hash is required."
+            }
+        } else require((uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty()) ||
+            (kind != EngineSourceKind.HTTP && uri.scheme == "file" && uri.host.isNullOrEmpty())) {
+            if (kind == EngineSourceKind.HTTP) "An absolute HTTP or HTTPS URL is required" else "An absolute HTTP/HTTPS URL or imported metadata file is required"
         }
+        require(selectedFiles == null || (selectedFiles.isNotEmpty() && selectedFiles.all { it > 0 } && selectedFiles.distinct().size == selectedFiles.size))
         require(uri.rawUserInfo == null) { "URL credentials are not supported" }
         require(fileName.isNotBlank() && fileName != "." && fileName != ".." &&
             fileName.none { it == '/' || it == '\\' || it.isISOControl() }) {
@@ -78,7 +96,7 @@ data class EngineRequest(
     }
 }
 
-enum class EngineTaskState { DOWNLOADING, QUEUED, PAUSED, COMPLETED, FAILED, REMOVED }
+enum class EngineTaskState { DOWNLOADING, QUEUED, PAUSED, COMPLETED, FAILED, REMOVED, METADATA, AWAITING_SELECTION }
 
 data class EngineTaskSnapshot(
     val id: EngineTaskId,
@@ -88,6 +106,7 @@ data class EngineTaskSnapshot(
     val bytesPerSecond: Long = 0,
     val errorCode: Int? = null,
     val errorMessage: String? = null,
+    val files: List<EngineFile> = emptyList(),
 )
 
 data class EngineSnapshot(
