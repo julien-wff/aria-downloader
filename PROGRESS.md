@@ -2,6 +2,21 @@
 
 ## 2026-10-17 - Per-download HTTP options
 
+- Follow-up verification with the reconnected Samsung SM-S948B:
+  `./gradlew connectedDebugAndroidTest` completed successfully. Background
+  pause/resume, completed-file hash verification, Advanced UI, HTTP headers and all
+  13 storage/device checks passed (29 device tests passed overall). Clipboard was
+  skipped because the background test left the phone locked; the opt-in large-file
+  test was also skipped. After the user unlocked the phone, the isolated clipboard
+  regression passed with no skips:
+
+  ```sh
+  ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.julien_wff.aria_android.ProductUiTest#clipboardPrefillsNewDownloadButNeverOverwritesDraftOrShareIntake
+  ```
+
+  All 30 default device tests have now passed across these runs; only the opt-in
+  large-file test remains unexecuted.
+
 - Removed the save-location notice from Add download. Added an accessible Advanced
   section, collapsed for each new form, with optional HTTP referrer and User-Agent.
 - Draft values survive collapsing and Activity recreation, and reset for fresh
