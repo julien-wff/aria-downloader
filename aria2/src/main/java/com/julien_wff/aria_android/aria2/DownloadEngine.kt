@@ -40,8 +40,11 @@ data class EngineRequest(
     val url: String,
     val fileName: String = "download",
     val options: EngineOptions = EngineOptions(),
+    /** Persist before adding; reusing it restores the same private staging directory. */
+    val taskId: EngineTaskId? = null,
 ) {
     init {
+        require(taskId == null || taskId.value.matches(Regex("[0-9a-f]{16}"))) { "Invalid staging identity" }
         val uri = try { URI(url) } catch (_: Exception) {
             throw IllegalArgumentException("An absolute HTTP or HTTPS URL is required")
         }

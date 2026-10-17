@@ -313,14 +313,17 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 2 (background vertical slice) is implemented, with automated acceptance
-verified on an API 37 phone (screen-off transfer, notification Pause/Cancel,
-explicit Resume, and final content hash). The application
-has single-download controls, a UIDT coordinator and system progress notifications
-(ProgressStyle on API 36+, standard progress on API 35). Completion currently means
-private staging. The single durable intent record deliberately does not implement
-milestone 3's Room recovery or public Downloads export. See README.md for behavior,
-test commands and remaining device acceptance checks.
+Milestone 3 (persistence and storage) is the current implementation milestone.
+The user explicitly authorized advancing without waiting for remaining milestone 2
+acceptance gates. Outstanding checks remain unverified; build, lint and relevant
+tests still apply to new changes.
+
+The single-download UIDT flow now gains Room intent/progress records, stable
+native staging identities, process-death resume and restartable MediaStore export.
+Only successfully published files are called Completed. Legacy JSON records are
+preserved without guessing their missing engine mappings. Queue/history screens,
+custom destinations and broader reliability policy remain later milestones.
+See README.md for behavior, verification commands and acceptance status.
 
 | Milestone                    | Deliverable                                         | Acceptance gate                                                                                      |
 |------------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------------|

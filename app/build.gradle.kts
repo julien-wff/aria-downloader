@@ -19,6 +19,7 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["notAnnotation"] = "com.julien_wff.aria_android.HostRecovery"
     }
 
     buildTypes {

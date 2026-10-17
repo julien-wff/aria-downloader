@@ -97,9 +97,8 @@ class BackgroundDownloadTest {
                     withContext(Dispatchers.Main) { controller.resume() }
                     await { it.status == DownloadStatus.COMPLETED }
                     assertTrue("Expected range resume", server.rangeRequests.get() > 0)
-                    val staged = File(context.noBackupFilesDir, "aria2").listFiles().orEmpty()
-                        .map { File(it, fileName) }.single { it.isFile }
-                    assertArrayEquals(server.hash(), staged.inputStream().use {
+                    val published = android.net.Uri.parse(requireNotNull(controller.state.value.publishedUri))
+                    assertArrayEquals(server.hash(), requireNotNull(context.contentResolver.openInputStream(published)).use {
                         val digest = MessageDigest.getInstance("SHA-256")
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
@@ -109,7 +108,9 @@ class BackgroundDownloadTest {
                         }
                         digest.digest()
                     })
-                    staged.parentFile?.deleteRecursively()
+                    context.contentResolver.delete(published, null, null)
+                    assertTrue(File(context.noBackupFilesDir, "aria2").listFiles().orEmpty()
+                        .none { File(it, fileName).exists() })
                     // Also exercise Cancel while the Activity is absent.
                     withContext(Dispatchers.Main) { controller.start(server.url, fileName) }
                     await { it.status == DownloadStatus.DOWNLOADING && it.completedBytes > 0 }

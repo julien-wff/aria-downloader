@@ -27,7 +27,7 @@ class DownloadControllerTest {
         var finished = 0
         var writeFailure = false
         val controller = DownloadController(engine, object : TransferStore {
-            override fun read() = stored
+            override suspend fun read() = stored
             override suspend fun write(record: TransferRecord) {
                 if (writeFailure) throw java.io.IOException("Disk full")
                 events += "save:${record.desired}"
@@ -40,7 +40,14 @@ class DownloadControllerTest {
                 return schedulingSucceeds
             }
             override fun cancel() { events += "cancelJob" }
-        }, scope.backgroundScope)
+        }, scope.backgroundScope, object : TransferExporter {
+            override suspend fun export(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
+                progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord {
+                val result = record.copy(status = DownloadStatus.COMPLETED, publishedUri = "content://downloads/test")
+                persist(result)
+                return result
+            }
+        })
         fun lease() = ExecutionLease(scheduledToken) { finished++ }
         suspend fun start() = controller.start("https://example.com/file", "file.bin")
     }
@@ -228,19 +235,123 @@ class DownloadControllerTest {
         runCurrent()
         assertEquals(1, f.finished)
         assertFalse(f.engine.snapshots.value.started)
-        assertEquals(DownloadStatus.FAILED, f.controller.state.value.status)
+        assertEquals(DownloadStatus.SAVE_FAILED, f.controller.state.value.status)
+        assertTrue(f.controller.state.value.canRetrySaving)
         assertTrue(f.controller.state.value.message!!.contains("preserved"))
+    }
+
+    @Test fun processRestartRecoversStableIdentityOnlyUnderAValidJobLease() = runTest {
+        val saved = TransferRecord("old", "https://example.com/file", "file.bin",
+            DesiredState.RUNNING, DownloadStatus.DOWNLOADING, taskId = "0123456789abcdef",
+            completedBytes = 40, totalBytes = 100)
+        val f = Fixture(this, saved)
+        runCurrent()
+        assertEquals(DownloadStatus.WAITING, f.controller.state.value.status)
+        assertTrue(f.controller.state.value.canResume)
+        assertEquals(40, f.controller.state.value.completedBytes)
+        assertEquals(0, f.engine.adds)
+        f.controller.authorize(ExecutionLease("stale") { f.finished++ })
+        runCurrent()
+        assertEquals(0, f.engine.adds)
+        f.controller.authorize(ExecutionLease("old") { f.finished++ })
+        runCurrent()
+        assertEquals(saved.taskId, f.engine.lastRequest!!.taskId!!.value)
+        assertEquals(DownloadStatus.DOWNLOADING, f.controller.state.value.status)
+    }
+
+    @Test fun restoredPauseAndCancelNeverAuthorizeTransferWork() = runTest {
+        for ((desired, status) in listOf(DesiredState.PAUSED to DownloadStatus.PAUSED,
+                DesiredState.CANCELED to DownloadStatus.CANCELED)) {
+            val f = Fixture(this, TransferRecord("old", "https://example.com/file", "file.bin",
+                desired, status, taskId = "0123456789abcdef"))
+            f.controller.authorize(ExecutionLease("old") { f.finished++ })
+            runCurrent()
+            assertEquals(status, f.controller.state.value.status)
+            assertEquals(0, f.engine.adds)
+        }
+    }
+
+    @Test fun interruptedExportOffersSavingRetryWithoutStartingTheEngine() = runTest {
+        val f = Fixture(this, TransferRecord("old", "https://example.com/file", "file.bin",
+            DesiredState.RUNNING, DownloadStatus.EXPORTING, taskId = "0123456789abcdef",
+            publishedUri = "content://downloads/1", completedBytes = 100))
+        runCurrent()
+        assertEquals(DownloadStatus.SAVE_FAILED, f.controller.state.value.status)
+        assertTrue(f.controller.state.value.canRetrySaving)
+        f.controller.retrySaving()
+        assertEquals(DownloadStatus.COMPLETED, f.controller.state.value.status)
+        assertEquals(0, f.engine.adds)
+        assertEquals("", f.scheduledToken)
+    }
+
+    @Test fun staleAuthorizationCannotReplaceAnActiveLease() = runTest {
+        val f = Fixture(this)
+        f.start()
+        val current = f.lease()
+        f.controller.authorize(current)
+        runCurrent()
+        f.controller.authorize(ExecutionLease("stale") { f.finished++ })
+        runCurrent()
+        assertTrue(f.controller.revoke(current))
+        runCurrent()
+        assertEquals(DownloadStatus.WAITING, f.controller.state.value.status)
+    }
+
+    @Test fun staleNotificationControlsCannotChangeANewerAuthorization() = runTest {
+        val f = Fixture(this)
+        f.start()
+        val oldToken = f.scheduledToken
+        f.controller.pause()
+        f.controller.resume()
+        f.controller.pause(oldToken)
+        f.controller.cancel(oldToken)
+        assertEquals(DownloadStatus.SCHEDULED, f.controller.state.value.status)
+        assertEquals(DesiredState.RUNNING, f.stored!!.desired)
+    }
+
+    @Test fun lateCancelFromACompletedTransfersNotificationCannotUndoPublication() = runTest {
+        val f = Fixture(this)
+        f.start()
+        f.controller.authorize(f.lease())
+        runCurrent()
+        f.engine.emit(EngineTaskState.COMPLETED)
+        runCurrent()
+        f.controller.cancel(f.scheduledToken)
+        assertEquals(DownloadStatus.COMPLETED, f.controller.state.value.status)
+        assertEquals(DownloadStatus.COMPLETED, f.stored!!.status)
+    }
+
+    @Test fun unreadableDatabaseDoesNotStartWorkOrCrashTheSnapshotCollector() = runTest {
+        val events = mutableListOf<String>()
+        val engine = FakeEngine(events)
+        var finished = 0
+        val controller = DownloadController(engine, object : TransferStore {
+            override suspend fun read(): TransferRecord? = throw java.io.IOException("Unavailable database")
+            override suspend fun write(record: TransferRecord) { fail("Unexpected write") }
+        }, object : TransferScheduler {
+            override fun schedule(token: String): Boolean { fail("Unexpected scheduling"); return false }
+            override fun cancel() { }
+        }, backgroundScope)
+        controller.authorize(ExecutionLease("old") { finished++ })
+        runCurrent()
+        assertEquals(DownloadStatus.INTERRUPTED, controller.state.value.status)
+        assertEquals(1, finished)
+        assertEquals(0, engine.adds)
+        try { controller.start("https://example.com/file"); fail("Should reject actions after load failure") }
+        catch (_: IllegalStateException) { }
     }
 
     private class FakeEngine(private val events: MutableList<String>) : DownloadEngine {
         override val snapshots = MutableStateFlow(EngineSnapshot())
         private val id = EngineTaskId("test")
+        var lastRequest: EngineRequest? = null
         var adds = 0
         var resumes = 0
         var checkpoints = 0
         var addGate: CompletableDeferred<Unit>? = null
         override suspend fun start() { events += "start"; snapshots.value = snapshots.value.copy(started = true) }
         override suspend fun add(request: EngineRequest): EngineTaskId {
+            lastRequest = request
             adds++; events += "add"; addGate?.await(); emit(EngineTaskState.DOWNLOADING); return id
         }
         override suspend fun resume(id: EngineTaskId) { resumes++; emit(EngineTaskState.DOWNLOADING) }

@@ -1,4 +1,5 @@
 plugins {
+    alias(libs.plugins.ksp)
     alias(libs.plugins.android.library)
 }
 
@@ -15,7 +16,11 @@ android {
     }
 }
 
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
+    implementation(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
     implementation(project(":aria2"))
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

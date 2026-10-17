@@ -1,5 +1,61 @@
 # Development progress
 
+## 2026-10-17 - Persistence and public Downloads export
+
+Status: milestone 3 implemented and verified on API 37, including abrupt
+process-death recovery and public-file content hashes.
+The user authorized advancing past outstanding milestone 2 acceptance gates.
+That supersedes the historical advancement restrictions below, without marking
+those outstanding checks as passed.
+
+### Implemented
+
+- Added Room schema v1 in private no-backup storage, with pinned Room/KSP
+  dependencies, persisted desired/observed state, stable native mapping, 64-bit
+  progress and export URI. Earlier task rows remain stored; the single-task UI
+  displays the newest. Legacy JSON imports once without inventing a staging map.
+- Reconstructs a native task in its original staging directory under an existing
+  UIDT lease, or exposes explicit Resume. Startup never schedules a new job.
+  Paused/canceled tasks stay stopped; stale notification tokens cannot control
+  newer authorizations.
+- Added restartable pending MediaStore export into
+  `Downloads/Aria/<task UUID>/<filename>`. Pending entries are discoverable across
+  the insert/Room crash window; published entries are never recopied. Completion
+  and staging cleanup follow successful publication and its durable Room record.
+- Added Saving/Retry saving UI and notifications. Failed exports preserve staged
+  data. Visible local retries do not start a network engine or schedule a UIDT job.
+- Added JVM fault-injection tests, Room/MediaStore device coverage and an opt-in
+  host-driven process-kill harness. Updated the background flow to hash the public
+  file and check staging removal.
+
+### Verification status
+
+- The following command passed on a Samsung SM-S948B running Android 17 (API 37):
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :downloads:testDebugUnitTest :aria2:testDebugUnitTest \
+    connectedDebugAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.notClass=com.julien_wff.aria_android.aria2.NativeEngineTest#fullLargeFileHash
+  ```
+
+- All 35 JVM tests and all 16 default device tests passed (2 app,
+  8 persistence/export/notifications, 6 native). Host-only recovery phases are
+  excluded from the default suite using the HostRecovery annotation.
+- The abrupt process-kill harness passed against the final APKs:
+
+  ```sh
+  python3 tools/test-process-recovery.py --adb "$ANDROID_HOME/platform-tools/adb"
+  ```
+
+  The seed process was killed with SIGKILL while downloading; its instrumentation
+  intentionally reported process death. A new process recovered the task using
+  range requests and verified the public file's SHA-256. The recovery phase passed
+  in 47 seconds. The host server and ADB reverse mapping were cleaned up.
+- Real filesystem disk exhaustion is simulated in JVM tests, not induced on the
+  user's device. API 35 rendering, 16 KiB runtime acceptance, the opt-in 4 GiB
+  transfer and existing manual appearance/permission-denial checks remain outside
+  this verification run.
+
 ## 2026-10-17 - Embedded native engine
 
 Status: milestone 1 implementation and 4 KiB device verification complete;

@@ -33,7 +33,7 @@ internal class TransferNotifications(
     }
 
     fun build(state: DownloadState, token: String): Notification {
-        val active = state.canPause
+        val active = state.canPause || state.status == DownloadStatus.EXPORTING
         val builder = Notification.Builder(context, if (active) ACTIVE_CHANNEL else RESULT_CHANNEL)
             .setSmallIcon(R.drawable.ic_download)
             .setContentTitle(state.fileName)
@@ -49,8 +49,10 @@ internal class TransferNotifications(
                 .setSmallIcon(R.drawable.ic_download).setContentTitle("Aria Downloader")
                 .setContentText("Download status").build())
         if (active) {
-            val unknown = state.totalBytes <= 0 || state.status != DownloadStatus.DOWNLOADING
-            val progress = progressValue(state.completedBytes, state.totalBytes)
+            val saving = state.status == DownloadStatus.EXPORTING
+            val unknown = if (saving) state.completedBytes <= 0 else state.totalBytes <= 0 || state.status != DownloadStatus.DOWNLOADING
+            val progress = if (saving) progressValue(state.savedBytes, state.completedBytes)
+                else progressValue(state.completedBytes, state.totalBytes)
             if (Build.VERSION.SDK_INT >= 36) {
                 builder.setStyle(Notification.ProgressStyle()
                     .setProgressSegments(listOf(Notification.ProgressStyle.Segment(1000)))
@@ -60,8 +62,10 @@ internal class TransferNotifications(
             } else {
                 builder.setProgress(1000, progress, unknown)
             }
-            builder.addAction(action("Pause", PAUSE, token, 1))
+            if (!saving) builder.addAction(action("Pause", PAUSE, token, 1))
                 .addAction(action("Cancel", CANCEL, token, 2))
+        } else if (state.canRetrySaving) {
+            builder.addAction(Notification.Action.Builder(null, "Retry saving", openApp()).build())
         } else if (state.canResume) {
             builder.addAction(Notification.Action.Builder(null, "Resume", openApp()).build())
         }
@@ -105,7 +109,10 @@ internal class TransferNotifications(
             DownloadStatus.SCHEDULED -> "Waiting to start"
             DownloadStatus.WAITING -> "Waiting for network or system permission to run"
             DownloadStatus.PAUSED -> "Paused · Tap Resume to open the app"
-            DownloadStatus.COMPLETED -> "Downloaded to private staging"
+            DownloadStatus.STAGED -> "Ready to save to Downloads"
+            DownloadStatus.EXPORTING -> "Saving to Downloads…"
+            DownloadStatus.SAVE_FAILED -> "Saving failed · Open the app to retry saving"
+            DownloadStatus.COMPLETED -> "Saved to Downloads"
             DownloadStatus.FAILED -> state.message ?: "Download failed"
             DownloadStatus.CANCELED -> "Canceled"
             DownloadStatus.INTERRUPTED -> "Interrupted · Open the app"

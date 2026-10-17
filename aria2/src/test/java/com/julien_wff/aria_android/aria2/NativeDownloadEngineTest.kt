@@ -45,6 +45,9 @@ class NativeDownloadEngineTest {
         for (url in listOf("file:///tmp/a", "magnet:?xt=a", "https://user:secret@example.org/a", "https:/missing")) {
             assertThrows(IllegalArgumentException::class.java) { EngineRequest(url) }
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            EngineRequest("https://example.org/a", taskId = EngineTaskId("../escape"))
+        }
         for (name in listOf("../file", "..", "a/b", "a\\b", "a\u0000b")) {
             assertThrows(IllegalArgumentException::class.java) { EngineRequest("https://example.org/a", name) }
         }
@@ -98,6 +101,28 @@ class NativeDownloadEngineTest {
             other.start()
             other.stop()
         } finally { engine.close(); other.close(); root.deleteRecursively() }
+    }
+
+    @Test fun reconstructingEngineReusesPersistedTaskDirectoryAndControlFiles() = runBlocking {
+        val root = Files.createTempDirectory("aria-recovery-test").toFile()
+        val id = EngineTaskId("0123456789abcdef")
+        val request = EngineRequest("https://example.org/file", "file.bin", taskId = id)
+        val first = engine(root, FakeNative())
+        try {
+            first.start()
+            assertEquals(id, first.add(request))
+            File(root, "${id.value}/file.bin").writeText("partial")
+            File(root, "${id.value}/file.bin.aria2").writeText("checkpoint")
+        } finally { first.close() }
+        val backend = FakeNative()
+        val restored = engine(root, backend)
+        try {
+            restored.start()
+            assertEquals(id, restored.add(request))
+            assertEquals(File(root, id.value).canonicalPath, backend.additions.last()["dir"])
+            assertEquals("partial", File(root, "${id.value}/file.bin").readText())
+            assertEquals("checkpoint", File(root, "${id.value}/file.bin.aria2").readText())
+        } finally { restored.close(); root.deleteRecursively() }
     }
 
     @Test fun removeCancelsWithoutDeletingStagedDataAndCloseRejectsCommands() = runBlocking {

@@ -17,6 +17,8 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 2 wires one HTTP/HTTPS task through the UI and a UIDT job. Completed
-files remain in private staging; Room recovery and public Downloads export are
-not implemented. Do not present staged completion as a publicly saved file.
+Milestone 3 is current: Room recovery, native checkpoints and public Downloads export,
+while retaining the single-download UI. Remaining milestone 2 acceptance gates do
+not block advancement (explicit user decision); build, lint and relevant tests
+still apply to new work. Completion means successful MediaStore publication.
+Staged or export-failed files must never be presented as publicly saved files.

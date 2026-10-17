@@ -76,6 +76,7 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     fun pause() = act { controller.pause() }
     fun resume() = act { controller.resume() }
     fun cancel() = act { controller.cancel() }
+    fun retrySaving() = act { controller.retrySaving() }
 
     private fun act(action: suspend () -> Unit) {
         if (mutableBusy.value) return
@@ -108,7 +109,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel = viewModel()) {
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
             .padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(stringResource(R.string.downloads_title), style = MaterialTheme.typography.headlineLarge)
-            Text("Download one file at a time. Files stay inside this app; saving to your Downloads folder is coming later.",
+            Text("Download one file at a time. Completed files are saved to Downloads/Aria.",
                 style = MaterialTheme.typography.bodyMedium)
             OutlinedTextField(url, { url = it }, label = { Text("HTTP or HTTPS URL") },
                 modifier = Modifier.fillMaxWidth(), enabled = state.canStart && !busy,
@@ -128,6 +129,11 @@ internal fun DownloadsScreen(model: DownloadsViewModel = viewModel()) {
             } else {
                 Text(state.fileName, style = MaterialTheme.typography.titleLarge)
                 Text(statusLabel(state.status))
+                if (state.status == DownloadStatus.EXPORTING) {
+                    LinearProgressIndicator(progress = {
+                        if (state.completedBytes > 0) (state.savedBytes.toDouble() / state.completedBytes).toFloat().coerceIn(0f, 1f) else 0f
+                    }, modifier = Modifier.fillMaxWidth())
+                }
                 if (state.canPause) {
                     if (state.totalBytes > 0) {
                         LinearProgressIndicator(progress = {
@@ -140,6 +146,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel = viewModel()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.canPause) OutlinedButton(onClick = model::pause, enabled = !busy) { Text("Pause") }
                     if (state.canResume) Button(onClick = model::resume, enabled = !busy) { Text("Resume") }
+                    if (state.canRetrySaving) Button(onClick = model::retrySaving, enabled = !busy) { Text("Retry saving") }
                     if (state.canCancel) OutlinedButton(onClick = model::cancel, enabled = !busy) { Text("Cancel") }
                 }
             }
@@ -155,7 +162,10 @@ private fun statusLabel(status: DownloadStatus): String = when (status) {
     DownloadStatus.DOWNLOADING -> "Downloading"
     DownloadStatus.WAITING -> "Waiting for network or Android"
     DownloadStatus.PAUSED -> "Paused"
-    DownloadStatus.COMPLETED -> "Downloaded to private staging"
+    DownloadStatus.STAGED -> "Ready to save"
+    DownloadStatus.EXPORTING -> "Saving to Downloads…"
+    DownloadStatus.SAVE_FAILED -> "Saving failed · Staged file preserved"
+    DownloadStatus.COMPLETED -> "Saved to Downloads"
     DownloadStatus.FAILED -> "Failed"
     DownloadStatus.CANCELED -> "Canceled"
     DownloadStatus.INTERRUPTED -> "Interrupted"

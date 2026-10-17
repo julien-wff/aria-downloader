@@ -1,16 +1,15 @@
 # Aria Downloader
 
-Native Android download manager following [plan.md](plan.md). Milestone 2 connects
-the embedded engine to a single HTTP/HTTPS download, started from a minimal
-Compose screen and run by a user-initiated data transfer (UIDT) job. Completed files
-remain in **private app staging**, not the public Downloads folder. Room,
-process-death recovery and public export belong to milestone 3.
+Native Android download manager following [plan.md](plan.md). Milestone 3 adds
+Room-backed recovery and public Downloads export to the single HTTP/HTTPS task
+running under a user-initiated data transfer (UIDT) job. Files first download into
+private staging; **Completed means successfully published to Downloads**.
 
 ## Modules
 
 - `:app`: Compose controls, ViewModel, themes and application wiring.
-- `:downloads`: single-task controller, durable intent, UIDT scheduling and notifications;
-  future Room, queue policy and export.
+- `:downloads`: single-task controller, Room persistence, UIDT scheduling, notifications
+  and restartable Downloads export.
 - `:aria2`: native builds, JNI and engine interface.
 
 Dependencies flow `:app → :downloads → :aria2`.
@@ -50,7 +49,7 @@ Native builds additionally require NDK `30.0.16248370`, SDK CMake `4.1.2`,
 Python 3.12+ and host build tools. See the [native development guide](aria2/native/README.md)
 for NixOS setup, pinned sources, engine behavior and device acceptance commands.
 
-## Background vertical slice (milestone 2)
+## Persistence and storage (milestone 3)
 
 Enter an absolute HTTP/HTTPS URL and a safe single filename, then choose Start.
 The first Start requests notification permission; denial still allows the UIDT
@@ -67,19 +66,42 @@ cancel saves intent before stopping. A job network-change callback checkpoints
 the native session to refresh Android DNS. Native periodic checkpoints continue
 as before.
 
-A single atomic JSON intent record lives in `noBackupFilesDir`, alongside native
-staging. This is not a recovery database: after process loss, an unfinished task
-shows Interrupted and cannot resume. Cancel it before starting a new task. Old
-partial files are preserved; cleanup, Room reconciliation, export, and reboot
-recovery remain later work. Force-stop and Android Task Manager Stop are respected.
-Staged files are removed on uninstall.
+Room stores task identity, desired/observed state, 64-bit progress and export URI
+in `noBackupFilesDir/transfers.db`. It retains earlier task records while the UI
+shows only the newest. Important transitions persist immediately; progress writes
+are throttled to three seconds. The schema is checked into `downloads/schemas`;
+Room and its KSP processor versions are pinned in the version catalog.
+
+The engine reuses each persisted task ID and its `aria2/<id>` staging directory.
+After process death, an existing authorized UIDT job can restore the transfer;
+otherwise the screen offers Resume. Loading the app never schedules a new job.
+Paused/canceled intent, force-stop and Task Manager Stop remain respected.
+Legacy `transfer.json` records import once, but have no reliable staging mapping:
+the UI preserves them as interrupted and never guesses which old directory to use.
+
+Native completion transitions through Ready to save and Saving to Downloads.
+Export creates an app-owned pending MediaStore entry, records its URI before
+copying, then publishes only after the full copy closes successfully. Each task
+gets `Downloads/Aria/<task UUID>/<filename>`, so identical names do not overwrite
+another task's file. The namespace also finds a pending entry if the process dies
+between insertion and recording its URI. A published entry is never recopied on
+retry. Staging is deleted only after successful publication and its durable Room
+record; interrupted cleanup is retried on a later launch.
+
+Export temporarily requires space for both staging and the public copy. Disk-full
+or interrupted exports preserve staging and offer **Retry saving**. A visible
+Retry saving action performs local export without starting the network engine or
+scheduling a UIDT job; if its process is interrupted, retry on the next launch.
+Canceled partials and unlocatable legacy files remain preserved. Staging is
+removed on uninstall; successfully published Downloads files remain.
 
 Notifications use the system `Notification.ProgressStyle` on API 36+ and standard
 progress on API 35, without custom layouts or a promoted Live Update requirement.
 Known sizes have continuous progress; unknown sizes are indeterminate. Active
 updates are silent, coalesced to approximately once per second, and show size,
 speed and ETA when available. Private lock-screen visibility hides filenames.
-Completion explicitly reports private staging and offers no public Open/Share.
+Saving uses progress notifications; failures open the app for Retry saving.
+Completion reports Saved to Downloads. Open/Share controls remain later UI work.
 
 ```sh
 ./gradlew assembleDebug lintDebug :downloads:testDebugUnitTest :aria2:testDebugUnitTest
@@ -89,15 +111,36 @@ Completion explicitly reports private staging and offers no public Open/Share.
 
 The app background test uses a controlled throttled loopback server, leaves the
 Activity, locks the screen, invokes notification Pause, resumes through visible
-app authorization, verifies SHA-256, and cancels a second transfer from its
-notification. A test-only lifecycle rule lets the test Activity return above a
+app authorization, verifies the public file’s SHA-256 and staging cleanup, and
+cancels a second transfer from its notification. A test-only lifecycle rule lets the test Activity return above a
 secure keyguard without changing device security or production window flags.
 Notification tests cover unknown/large sizes, unavailable ETA, terminal states,
 immutable controls, and optional updates with a simulated denied-permission query.
+Room/MediaStore device tests cover reopening the database, legacy import, pending
+entry discovery, publication interruption and name collisions. JVM tests also
+simulate disk-full and revoked execution while preserving recoverable data.
 The runner grants manifest permissions automatically; the real permission-dialog
 denial flow still needs a manual check. The explicit method exclusion above keeps
 the opt-in 4 GiB test out of the default suite; run it separately as documented in
 the native guide.
+
+For an abrupt process-kill recovery check, first build the app/test APKs and run:
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+python3 tools/test-process-recovery.py --adb "$ANDROID_HOME/platform-tools/adb"
+```
+
+Pass `--serial <device>` when necessary. The script installs the debug APKs,
+serves a controlled range-enabled file on the host through `adb reverse`, starts
+a UIDT transfer, kills the live app with `run-as ... kill -9`, and launches a
+separate instrumentation phase to resume and hash the published file. The two
+phase tests are excluded from ordinary suites by the HostRecovery annotation.
+This intentionally interrupts the app's current task; use a development device. No dataSync foreground service or
+unattended scheduling is introduced.
+
+The following verification results describe **milestone 2 before these changes**.
+Current milestone 3 results are recorded in PROGRESS.md.
 
 Validated on 2026-10-17 with a Samsung SM-S948B running Android 17 (API 37):
 build and lint passed, all 18 JVM tests passed, and all 13 default device tests

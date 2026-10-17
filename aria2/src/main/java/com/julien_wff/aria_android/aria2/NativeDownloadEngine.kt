@@ -113,10 +113,11 @@ class NativeDownloadEngine internal constructor(
 
     override suspend fun add(request: EngineRequest): EngineTaskId = execute {
         requireStarted()
-        val id = EngineTaskId(UUID.randomUUID().toString().replace("-", "").take(16))
+        val id = request.taskId ?: EngineTaskId(UUID.randomUUID().toString().replace("-", "").take(16))
+        check(id !in tasks) { "Task is already registered" }
         check(root.isDirectory || root.mkdirs()) { "Cannot create engine directory" }
         val directory = File(root, id.value)
-        check(directory.mkdir()) { "Cannot create task directory" }
+        check(directory.mkdir() || (request.taskId != null && directory.isDirectory)) { "Cannot create task directory" }
         check(directory.canonicalFile.parentFile == root.canonicalFile)
         val task = Task(id, request, directory)
         ensureSession()
