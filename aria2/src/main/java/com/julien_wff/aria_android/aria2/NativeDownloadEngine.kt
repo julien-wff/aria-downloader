@@ -47,6 +47,7 @@ class NativeDownloadEngine internal constructor(
     private val mutableSnapshots = MutableStateFlow(EngineSnapshot())
     override val snapshots = mutableSnapshots.asStateFlow()
     private val tasks = linkedMapOf<EngineTaskId, Task>()
+    private var concurrency = 3
     private var started = false
     private var opened = false
     private val closing = AtomicBoolean(false)
@@ -102,6 +103,12 @@ class NativeDownloadEngine internal constructor(
         val result = CompletableDeferred<Any?>()
         commands.send(Command(action, result))
         return result.await() as T
+    }
+
+    override suspend fun configureConcurrency(limit: Int): Unit = execute {
+        require(limit in 1..6)
+        check(!started) { "Stop the engine before configuring concurrency" }
+        concurrency = limit
     }
 
     override suspend fun start(): Unit = execute {
@@ -224,7 +231,7 @@ class NativeDownloadEngine internal constructor(
             "ca-certificate", config.caFile.canonicalPath, "async-dns", "true",
             "save-session", File(root, "session.txt").absolutePath,
             "save-session-interval", "5", "auto-save-interval", "5",
-            "max-concurrent-downloads", "3", "file-allocation", "none",
+            "max-concurrent-downloads", concurrency.toString(), "file-allocation", "none",
             "console-log-level", "error", "quiet", "true", "log-level", "error",
             "follow-torrent", "false", "follow-metalink", "false", "enable-dht", "false",
             "enable-dht6", "false", "enable-peer-exchange", "false", "seed-time", "0",

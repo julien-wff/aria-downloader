@@ -45,7 +45,7 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
     override fun create(record: TransferRecord): String = resolver.insert(collection,
         ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, record.fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+            put(MediaStore.Downloads.MIME_TYPE, mimeForFileName(record.fileName))
             put(MediaStore.Downloads.RELATIVE_PATH, path(record))
             put(MediaStore.Downloads.IS_PENDING, 1)
         })?.toString() ?: throw IOException("Unable to create a Downloads entry")
@@ -136,3 +136,7 @@ internal class DownloadExporter(
         Unit
     }
 }
+
+internal fun mimeForFileName(name: String): String = android.webkit.MimeTypeMap.getSingleton()
+    .getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT))
+    ?: "application/octet-stream"

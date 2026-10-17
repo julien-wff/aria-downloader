@@ -8,6 +8,8 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.NetworkRequest
+import android.net.NetworkCapabilities
 import android.os.PersistableBundle
 import android.os.SystemClock
 import android.util.AtomicFile
@@ -25,6 +27,8 @@ import org.json.JSONObject
 object DownloadRuntime {
     @Volatile private var instance: Runtime? = null
 
+    fun preferences(context: Context): DownloadPreferences = runtime(context).preferences
+
     fun controller(context: Context): DownloadController = runtime(context).controller
 
     internal fun runtime(context: Context): Runtime = instance ?: synchronized(this) {
@@ -33,6 +37,7 @@ object DownloadRuntime {
 
     internal class Runtime(context: Context) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val preferences = DownloadPreferences(context)
         private val store = RoomTransferStore(context)
         private val scheduler = context.getSystemService(JobScheduler::class.java)
         val notifications = TransferNotifications(context)
@@ -42,10 +47,18 @@ object DownloadRuntime {
                 override fun schedule(token: String): Boolean {
                     val job = JobInfo.Builder(1001, ComponentName(context, TransferJobService::class.java))
                         .setUserInitiated(true)
-                        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                        .setEstimatedNetworkBytes(controller.state.value.let {
-                            if (it.totalBytes > 0) (it.totalBytes - it.completedBytes).coerceAtLeast(0)
-                            else JobInfo.NETWORK_BYTES_UNKNOWN.toLong()
+                        .setRequiredNetwork(NetworkRequest.Builder()
+                            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                            .apply { if (controller.batchWifiOnly) {
+                                addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                                addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                            } }.build())
+                        .setEstimatedNetworkBytes(controller.tasks.value.filter { it.state.canPause }.let { tasks ->
+                            if (tasks.any { it.state.totalBytes <= 0 }) JobInfo.NETWORK_BYTES_UNKNOWN.toLong()
+                            else tasks.fold(0L) { sum, task ->
+                                val remaining = (task.state.totalBytes - task.state.completedBytes).coerceAtLeast(0)
+                                if (Long.MAX_VALUE - sum < remaining) Long.MAX_VALUE else sum + remaining
+                            }
                         }, JobInfo.NETWORK_BYTES_UNKNOWN.toLong())
                         .setExtras(PersistableBundle().apply { putString("token", token) })
                         .build()
@@ -57,14 +70,16 @@ object DownloadRuntime {
         init {
             // Render transitions immediately, coalesce high-frequency native progress to 1 Hz.
             scope.launch {
-                var last: DownloadState? = null
+                var last: List<DownloadTask> = emptyList()
+                var lastToken = ""
                 var updatedAt = 0L
                 while (true) {
-                    val current = controller.state.value
+                    val current = controller.tasks.value
                     val now = SystemClock.elapsedRealtime()
-                    if (current != last && (last?.status != current.status || now - updatedAt >= 1000)) {
-                        notifications.update(current, token)
+                    if ((current != last || token != lastToken) && (token != lastToken || last.map { it.id to it.state.status } != current.map { it.id to it.state.status } || now - updatedAt >= 1000)) {
+                        notifications.updateTasks(current, token)
                         last = current
+                        lastToken = token
                         updatedAt = now
                     }
                     delay(200)
@@ -77,6 +92,8 @@ object DownloadRuntime {
 /** Private, excluded from backup; this is a single intent record, not recovery metadata. */
 internal class AtomicTransferStore(context: Context) : TransferStore {
     private val file = AtomicFile(File(context.noBackupFilesDir, "transfer.json"))
+
+    fun clear() { file.delete() }
 
     override suspend fun read(): TransferRecord? = try {
         val json = JSONObject(file.openRead().bufferedReader().use { it.readText() })
@@ -107,7 +124,7 @@ class TransferJobService : JobService() {
         val runtime = DownloadRuntime.runtime(this)
         val token = params.extras.getString("token") ?: return false
         setNotification(params, TransferNotifications.ID,
-            runtime.notifications.build(runtime.controller.state.value, token),
+            runtime.notifications.summary(runtime.controller.tasks.value, token),
             JOB_END_NOTIFICATION_POLICY_DETACH)
         val lease = ExecutionLease(token) {
             if (executions.remove(params) != null) jobFinished(params, false)
@@ -140,9 +157,10 @@ class TransferActionReceiver : BroadcastReceiver() {
         runtime.scope.launch {
             try {
                 val token = intent.getStringExtra("token") ?: return@launch
+                val id = intent.getStringExtra("taskId")
                 when (intent.action) {
-                    TransferNotifications.PAUSE -> runtime.controller.pause(token)
-                    TransferNotifications.CANCEL -> runtime.controller.cancel(token)
+                    TransferNotifications.PAUSE -> if (id == null) runtime.controller.pause(token) else runtime.controller.pauseTask(id, token)
+                    TransferNotifications.CANCEL -> if (id == null) runtime.controller.cancel(token) else runtime.controller.cancelTask(id, token)
                 }
             } catch (_: Exception) {
                 // In particular, a failed intent write must leave the existing transfer alone.

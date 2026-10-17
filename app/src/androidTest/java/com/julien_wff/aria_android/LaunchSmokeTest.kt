@@ -1,7 +1,9 @@
 package com.julien_wff.aria_android
 
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
@@ -18,8 +20,9 @@ class LaunchSmokeTest {
 
     @Test
     fun launcherShowsDownloadControls() {
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.downloads_title))
+        composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.downloads_title))[0]
             .assertIsDisplayed()
+        composeRule.onNodeWithText("Add download").performClick()
         composeRule.onNodeWithText("HTTP or HTTPS URL").assertIsDisplayed()
         composeRule.onNodeWithText("Filename").assertIsDisplayed()
         composeRule.onNodeWithText("Start download").assertIsDisplayed()

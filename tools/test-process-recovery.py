@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in device acceptance: kill a live UIDT transfer, resume, verify its public hash."""
+"""Opt-in device acceptance: kill two live UIDT transfers, resume, verify both public hashes."""
 import argparse
 import hashlib
 import http.server
@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit, parse_qs
 
 
 def main():
@@ -26,7 +27,9 @@ def main():
             pass
 
         def do_GET(self):
-            if self.path != "/file":
+            request = urlsplit(self.path)
+            task = parse_qs(request.query).get("recoveryTask", [""])[0]
+            if request.path != "/file":
                 self.send_error(404)
                 return
             start, end = 0, len(payload) - 1
@@ -36,7 +39,7 @@ def main():
                 start = int(first)
                 if last:
                     end = min(int(last), end)
-                ranges.append(start)
+                ranges.append((task, start))
             self.send_response(206 if requested else 200)
             self.send_header("Content-Length", str(end - start + 1))
             self.send_header("Accept-Ranges", "bytes")
@@ -101,9 +104,9 @@ def main():
         print(result, flush=True)
         if "OK (1 test)" not in result:
             raise RuntimeError("Recovery instrumentation did not pass")
-        if not any(offset > 0 for offset in ranges):
-            raise RuntimeError("Recovery did not issue any non-zero range request")
-        print("PASS: abrupt process death recovered; public SHA-256 matched; range resume verified.")
+        if not all(any(task == expected and offset > 0 for task, offset in ranges) for expected in ("0", "1")):
+            raise RuntimeError("Recovery did not issue non-zero range requests for both tasks")
+        print("PASS: two transfers recovered after abrupt process death; both public SHA-256 hashes matched; range resume verified.")
     finally:
         run("reverse", "--remove", f"tcp:{port}")
         server.shutdown()

@@ -131,7 +131,7 @@ class BackgroundDownloadTest {
         }
     }
 
-    private class ControlledServer : Closeable {
+    internal class ControlledServer : Closeable {
         private val bytes = ByteArray(8 * 1024 * 1024) { (it % 251).toByte() }
         private val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val executor = Executors.newCachedThreadPool()

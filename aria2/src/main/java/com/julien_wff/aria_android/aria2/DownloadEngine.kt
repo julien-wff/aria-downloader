@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 
 interface DownloadEngine {
     val snapshots: StateFlow<EngineSnapshot>
+    /** Configure only while stopped. Admission is also enforced by the download coordinator. */
+    suspend fun configureConcurrency(limit: Int) { require(limit in 1..6) }
     suspend fun start()
     suspend fun add(request: EngineRequest): EngineTaskId
     suspend fun pause(id: EngineTaskId)

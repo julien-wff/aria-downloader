@@ -1,14 +1,14 @@
 # Aria Downloader
 
-Native Android download manager following [plan.md](plan.md). Milestone 3 adds
-Room-backed recovery and public Downloads export to the single HTTP/HTTPS task
-running under a user-initiated data transfer (UIDT) job. Files first download into
+Native Android download manager following [plan.md](plan.md). Milestone 4 adds
+Downloads, History, details, Settings and reviewed share intake around a concurrent
+HTTP/HTTPS queue running under a user-initiated data transfer (UIDT) job. Files first download into
 private staging; **Completed means successfully published to Downloads**.
 
 ## Modules
 
 - `:app`: Compose controls, ViewModel, themes and application wiring.
-- `:downloads`: single-task controller, Room persistence, UIDT scheduling, notifications
+- `:downloads`: queue controller, Room persistence, UIDT scheduling, notifications
   and restartable Downloads export.
 - `:aria2`: native builds, JNI and engine interface.
 
@@ -49,31 +49,61 @@ Native builds additionally require NDK `30.0.16248370`, SDK CMake `4.1.2`,
 Python 3.12+ and host build tools. See the [native development guide](aria2/native/README.md)
 for NixOS setup, pinned sources, engine behavior and device acceptance commands.
 
-## Persistence and storage (milestone 3)
+## Product UI and queue (milestone 4)
 
-Enter an absolute HTTP/HTTPS URL and a safe single filename, then choose Start.
-The first Start requests notification permission; denial still allows the UIDT
-job, with controls available in the app. Only one unfinished task is supported.
-Start and Resume must happen while the app is visible. Notification Resume opens
-the app for an explicit Resume action instead of scheduling from the background.
+Downloads shows unfinished tasks with search, status filters, progress, speed and ETA.
+History retains completed, failed and canceled tasks. Select a row for details;
+wide windows show a navigation rail and the detail beside the list. The interface
+uses system dynamic colors and supports system, light and dark appearance.
 
-`:downloads` owns the process-wide controller and native engine. Only an active
-JobService execution authorizes native transfer work. Job callbacks and user
-commands are serialized; each execution has a separate lease so a stale stop
-callback cannot stop a newer run. System interruptions stop the engine and allow
-JobScheduler to retry while the same process retains its task mapping. A pause or
-cancel saves intent before stopping. A job network-change callback checkpoints
-the native session to refresh Android DNS. Native periodic checkpoints continue
-as before.
+Choose **Add download**, enter one absolute HTTP/HTTPS URL and a safe single
+filename, then Start. Sharing plain text to Aria opens the same review screen;
+receiving an intent never starts a transfer automatically. The first Start requests
+notification permission. Denial leaves app controls available and does not prevent UIDT.
+
+The FIFO queue runs three downloads by default, configurable from one to six.
+Paused tasks release their slots. Completed network work releases its slot while
+publication runs through a separate, serialized export worker. Export does not
+hold the coordinator lock, so other transfers remain controllable while saving.
+Task actions include pause, visible resume, cancellation with confirmation and
+Retry saving. Retry of failed/canceled transfers creates a new identity and staging
+folder; Retry saving retains its original destination and identity.
+
+Settings persist through DataStore. Connections per server default to four (1–16);
+the per-download speed default is unlimited (zero bytes/s). Connection/speed
+changes apply to new tasks. Concurrency and Wi-Fi-only changes reconcile the current
+queue from the visible settings action. Wi-Fi-only requires both Wi-Fi transport
+and an unmetered network; metered Wi-Fi does not satisfy it.
+
+History offers Open and Share only after successful publication. Both grant temporary
+read access. Missing files and unavailable apps produce an error. Delete removes
+the record and private staging after confirmation; an unchecked option also deletes
+the public file. Android consent is requested when necessary. Declining consent or
+failing file deletion keeps the record. Deleting an unfinished task first persists
+cancellation and stops its native work.
+
+`:downloads` owns the process-wide queue and native engine. A single UIDT job
+authorizes a durable batch of tasks. Visible Add/Resume and queue-setting changes
+atomically persist replacement membership and a fresh token, checkpoint/stop old
+work, then schedule the replacement job. Queue advancement stays inside that batch;
+it never schedules a new job from the background. Stale job callbacks and notification
+tokens cannot control a replacement. A task pause/cancel leaves unrelated tasks running.
+System interruption revokes the whole execution, checkpoints its native work and lets
+JobScheduler retry the existing batch. Network changes checkpoint to refresh Android DNS.
+No dataSync foreground service or unattended scheduling is introduced.
+
+## Persistence and public Downloads export
 
 Room stores task identity, desired/observed state, 64-bit progress and export URI
-in `noBackupFilesDir/transfers.db`. It retains earlier task records while the UI
-shows only the newest. Important transitions persist immediately; progress writes
-are throttled to three seconds. The schema is checked into `downloads/schemas`;
-Room and its KSP processor versions are pinned in the version catalog.
+in `noBackupFilesDir/transfers.db`. It retains all task records for queue and history.
+Important transitions persist immediately; progress writes are throttled to three
+seconds. Schema v2 migrates v1 without deleting rows, retaining native mappings, intent,
+64-bit progress and export destinations while adding transfer defaults and batch settings.
+Schemas are checked into `downloads/schemas`; Room, KSP and DataStore versions are pinned
+in the version catalog.
 
 The engine reuses each persisted task ID and its `aria2/<id>` staging directory.
-After process death, an existing authorized UIDT job can restore the transfer;
+After process death, an existing authorized UIDT job can restore its eligible batch;
 otherwise the screen offers Resume. Loading the app never schedules a new job.
 Paused/canceled intent, force-stop and Task Manager Stop remain respected.
 Legacy `transfer.json` records import once, but have no reliable staging mapping:
@@ -85,14 +115,15 @@ copying, then publishes only after the full copy closes successfully. Each task
 gets `Downloads/Aria/<task UUID>/<filename>`, so identical names do not overwrite
 another task's file. The namespace also finds a pending entry if the process dies
 between insertion and recording its URI. A published entry is never recopied on
-retry. Staging is deleted only after successful publication and its durable Room
+retry. Automatic staging cleanup follows successful publication and its durable Room
 record; interrupted cleanup is retried on a later launch.
 
 Export temporarily requires space for both staging and the public copy. Disk-full
 or interrupted exports preserve staging and offer **Retry saving**. A visible
 Retry saving action performs local export without starting the network engine or
 scheduling a UIDT job; if its process is interrupted, retry on the next launch.
-Canceled partials and unlocatable legacy files remain preserved. Staging is
+Canceled partials remain preserved until explicit deletion. Unlocatable legacy
+files are never guessed or removed. Staging is
 removed on uninstall; successfully published Downloads files remain.
 
 Notifications use the system `Notification.ProgressStyle` on API 36+ and standard
@@ -101,7 +132,10 @@ Known sizes have continuous progress; unknown sizes are indeterminate. Active
 updates are silent, coalesced to approximately once per second, and show size,
 speed and ETA when available. Private lock-screen visibility hides filenames.
 Saving uses progress notifications; failures open the app for Retry saving.
-Completion reports Saved to Downloads. Open/Share controls remain later UI work.
+Notifications are grouped by task with stable identities and an active summary.
+Pause/Cancel controls target only their task and authorization token. Resume/Retry
+open the task for a visible action. Completion reports Saved to Downloads with
+Open/Share actions.
 
 ```sh
 ./gradlew assembleDebug lintDebug :downloads:testDebugUnitTest :aria2:testDebugUnitTest
@@ -133,14 +167,14 @@ python3 tools/test-process-recovery.py --adb "$ANDROID_HOME/platform-tools/adb"
 
 Pass `--serial <device>` when necessary. The script installs the debug APKs,
 serves a controlled range-enabled file on the host through `adb reverse`, starts
-a UIDT transfer, kills the live app with `run-as ... kill -9`, and launches a
-separate instrumentation phase to resume and hash the published file. The two
+two simultaneous transfers, kills the live app with `run-as ... kill -9`, and launches
+a separate instrumentation phase to resume and hash both published files. The two
 phase tests are excluded from ordinary suites by the HostRecovery annotation.
-This intentionally interrupts the app's current task; use a development device. No dataSync foreground service or
+This intentionally interrupts the app's current queue; use a development device. No dataSync foreground service or
 unattended scheduling is introduced.
 
 The following verification results describe **milestone 2 before these changes**.
-Current milestone 3 results are recorded in PROGRESS.md.
+Current milestone results are recorded in PROGRESS.md.
 
 Validated on 2026-10-17 with a Samsung SM-S948B running Android 17 (API 37):
 build and lint passed, all 18 JVM tests passed, and all 13 default device tests

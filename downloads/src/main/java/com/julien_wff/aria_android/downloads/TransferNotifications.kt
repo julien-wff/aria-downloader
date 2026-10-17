@@ -32,13 +32,13 @@ internal class TransferNotifications(
         ))
     }
 
-    fun build(state: DownloadState, token: String): Notification {
+    fun build(state: DownloadState, token: String, taskId: String? = null): Notification {
         val active = state.canPause || state.status == DownloadStatus.EXPORTING
         val builder = Notification.Builder(context, if (active) ACTIVE_CHANNEL else RESULT_CHANNEL)
             .setSmallIcon(R.drawable.ic_download)
             .setContentTitle(state.fileName)
             .setContentText(description(state))
-            .setContentIntent(openApp())
+            .setContentIntent(openApp(taskId))
             .setCategory(if (active) Notification.CATEGORY_PROGRESS else Notification.CATEGORY_STATUS)
             .setOnlyAlertOnce(true)
             .setOngoing(active)
@@ -62,13 +62,18 @@ internal class TransferNotifications(
             } else {
                 builder.setProgress(1000, progress, unknown)
             }
-            if (!saving) builder.addAction(action("Pause", PAUSE, token, 1))
-                .addAction(action("Cancel", CANCEL, token, 2))
+            if (!saving) builder.addAction(action("Pause", PAUSE, token, 1, taskId))
+                .addAction(action("Cancel", CANCEL, token, 2, taskId))
         } else if (state.canRetrySaving) {
-            builder.addAction(Notification.Action.Builder(null, "Retry saving", openApp()).build())
+            builder.addAction(Notification.Action.Builder(null, "Retry saving", openApp(taskId)).build())
         } else if (state.canResume) {
-            builder.addAction(Notification.Action.Builder(null, "Resume", openApp()).build())
+            builder.addAction(Notification.Action.Builder(null, "Resume", openApp(taskId)).build())
         }
+        if (state.status == DownloadStatus.COMPLETED && state.publishedUri != null && taskId != null) {
+            builder.addAction(Notification.Action.Builder(null, "Open", openApp(taskId, "open")).build())
+                .addAction(Notification.Action.Builder(null, "Share", openApp(taskId, "share")).build())
+        }
+        if (taskId != null) builder.setGroup("downloads")
         return builder.build()
     }
 
@@ -88,17 +93,47 @@ internal class TransferNotifications(
         }
     }
 
-    private fun openApp(): PendingIntent {
+    fun summary(tasks: List<DownloadTask>, token: String): Notification {
+        val active = tasks.filter { it.state.canPause || it.state.status == DownloadStatus.EXPORTING }
+        if (active.size == 1) return Notification.Builder.recoverBuilder(context,
+            build(active.single().state, token, active.single().id)).setGroupSummary(true).build()
+        return Notification.Builder(context, ACTIVE_CHANNEL).setSmallIcon(R.drawable.ic_download)
+            .setContentTitle("Aria Downloader").setContentText(if (active.isEmpty()) "Download activity · Open Aria for details" else "${active.size} active or queued downloads")
+            .setContentIntent(openApp()).setGroup("downloads").setGroupSummary(true)
+            .setOnlyAlertOnce(true).setOngoing(active.isNotEmpty()).setAutoCancel(active.isEmpty()).build()
+    }
+
+    private var previousStates = emptyMap<String, DownloadState>()
+    private var previousToken = ""
+    fun updateTasks(tasks: List<DownloadTask>, token: String) {
+        if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val ids = tasks.map { it.id }.toSet()
+        (previousStates.keys - ids).forEach { manager.cancel(it, 1002) }
+        tasks.filter { (previousStates[it.id] != it.state || previousToken != token) && (!it.isHistory || it.id in previousStates) }
+            .forEach { manager.notify(it.id, 1002, build(it.state, token, it.id)) }
+        // Removing a group summary also removes its children on Android. Retain a detached
+        // non-ongoing summary when the last task pauses/completes so Resume/results survive.
+        if (tasks.isNotEmpty() && (tasks.any { !it.isHistory } || previousStates.values.any {
+                it.canPause || it.status == DownloadStatus.EXPORTING
+            })) manager.notify(ID, summary(tasks, token))
+        else if (tasks.isEmpty()) manager.cancel(ID)
+        previousStates = tasks.associate { it.id to it.state }
+        previousToken = token
+    }
+
+    private fun openApp(taskId: String? = null, fileAction: String? = null): PendingIntent {
         val intent = Intent(appIntent)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .setData(android.net.Uri.parse("aria-download://task/${taskId.orEmpty()}/${fileAction.orEmpty()}"))
+            .putExtra("taskId", taskId).putExtra("fileAction", fileAction)
         return PendingIntent.getActivity(context, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    private fun action(label: String, action: String, token: String, requestCode: Int): Notification.Action {
+    private fun action(label: String, action: String, token: String, requestCode: Int, taskId: String?): Notification.Action {
         val intent = Intent(context, TransferActionReceiver::class.java).setAction(action)
-            .setData(android.net.Uri.parse("aria-transfer://action/$token/$action"))
-            .putExtra("token", token)
+            .setData(android.net.Uri.parse("aria-transfer://action/$token/${taskId.orEmpty()}/$action"))
+            .putExtra("token", token).putExtra("taskId", taskId)
         val pending = PendingIntent.getBroadcast(context, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Action.Builder(null, label, pending).build()

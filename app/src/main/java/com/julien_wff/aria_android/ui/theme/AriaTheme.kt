@@ -8,9 +8,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun AriaTheme(content: @Composable () -> Unit) {
+fun AriaTheme(appearance: com.julien_wff.aria_android.downloads.Appearance = com.julien_wff.aria_android.downloads.Appearance.SYSTEM, content: @Composable () -> Unit) {
     val context = LocalContext.current
-    val colors = if (isSystemInDarkTheme()) {
+    val colors = if (appearance == com.julien_wff.aria_android.downloads.Appearance.DARK ||
+        (appearance == com.julien_wff.aria_android.downloads.Appearance.SYSTEM && isSystemInDarkTheme())) {
         dynamicDarkColorScheme(context)
     } else {
         dynamicLightColorScheme(context)

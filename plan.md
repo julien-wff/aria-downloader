@@ -313,16 +313,19 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 3 (persistence and storage) is the current implementation milestone.
+Milestone 4 (core product UI) is the current implementation milestone.
+The user authorized advancement after milestone 3 verification.
 The user explicitly authorized advancing without waiting for remaining milestone 2
 acceptance gates. Outstanding checks remain unverified; build, lint and relevant
 tests still apply to new changes.
 
-The single-download UIDT flow now gains Room intent/progress records, stable
-native staging identities, process-death resume and restartable MediaStore export.
-Only successfully published files are called Completed. Legacy JSON records are
-preserved without guessing their missing engine mappings. Queue/history screens,
-custom destinations and broader reliability policy remain later milestones.
+The product UI adds a FIFO queue with configurable concurrency (three by default),
+Downloads, History, task details, Settings and reviewed single-URL share intake.
+The multi-task UIDT coordinator retains Room intent/progress records, stable native
+staging identities, process-death resume and restartable MediaStore export. Only
+successfully published files are called Completed. Legacy JSON records are preserved
+without guessing their missing engine mappings. Custom destinations, bulk actions,
+queue reordering and broader reliability policy remain later work.
 See README.md for behavior, verification commands and acceptance status.
 
 | Milestone                    | Deliverable                                         | Acceptance gate                                                                                      |

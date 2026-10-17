@@ -13,11 +13,12 @@ class NativeDownloadEngineTest {
         val states = linkedMapOf<String, LongArray>()
         val owners = mutableSetOf<Long>()
         val additions = mutableListOf<Map<String, String>>()
+        var sessionOptions = emptyMap<String, String>()
         var opens = 0
         var shutdowns = 0
         var complete = false
         private fun owner() { owners += Thread.currentThread().threadId() }
-        override fun open(options: Array<String>) { owner(); opens++; states.clear() }
+        override fun open(options: Array<String>) { owner(); opens++; states.clear(); sessionOptions = options.toList().chunked(2).associate { it[0] to it[1] } }
         override fun add(id: String, url: String, options: Array<String>) {
             owner()
             val values = options.toList().chunked(2).associate { it[0] to it[1] }
@@ -40,6 +41,25 @@ class NativeDownloadEngineTest {
     private fun engine(root: File, native: FakeNative) = NativeDownloadEngine(
         root, { SessionEnvironment(File(root, "ca.pem"), listOf("192.0.2.53")) }, native,
     )
+
+    @Test fun concurrencyConfigurationIsBoundedAndAppliedToEachNativeSession() = runBlocking {
+        val root = Files.createTempDirectory("aria-concurrency-test").toFile()
+        val backend = FakeNative()
+        val engine = engine(root, backend)
+        try {
+            try { engine.configureConcurrency(7); fail("Unbounded concurrency") } catch (_: IllegalArgumentException) { }
+            engine.configureConcurrency(6)
+            engine.start()
+            engine.add(EngineRequest("https://example.org/file"))
+            assertEquals("6", backend.sessionOptions["max-concurrent-downloads"])
+            try { engine.configureConcurrency(2); fail("Changed a running session") } catch (_: IllegalStateException) { }
+            engine.stop()
+            engine.configureConcurrency(2)
+            engine.start()
+            engine.resume(engine.snapshots.value.tasks.single().id)
+            assertEquals("2", backend.sessionOptions["max-concurrent-downloads"])
+        } finally { engine.close(); root.deleteRecursively() }
+    }
 
     @Test fun rejectsUnsafeInputsAndUnboundedOptions() {
         for (url in listOf("file:///tmp/a", "magnet:?xt=a", "https://user:secret@example.org/a", "https:/missing")) {

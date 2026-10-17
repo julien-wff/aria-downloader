@@ -1,179 +1,131 @@
 package com.julien_wff.aria_android
 
-import android.Manifest
 import android.app.Application
-import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
-import android.text.format.Formatter
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.julien_wff.aria_android.downloads.DownloadFiles
 import com.julien_wff.aria_android.downloads.DownloadRuntime
-import com.julien_wff.aria_android.downloads.DownloadState
-import com.julien_wff.aria_android.downloads.DownloadStatus
-import com.julien_wff.aria_android.ui.theme.AriaTheme
-import kotlinx.coroutines.flow.MutableStateFlow
+import com.julien_wff.aria_android.downloads.DownloadSettings
+import com.julien_wff.aria_android.downloads.DownloadTask
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private val model by lazy { ViewModelProvider(this)[DownloadsViewModel::class.java] }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { AriaTheme { DownloadsScreen() } }
+        if (savedInstanceState == null) model.receive(intent)
+        setContent { DownloadsScreen(model) }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Consume each payload once without replacing the Activity's restoration intent.
+        model.receive(intent)
     }
 }
 
+data class IncomingDownload(val text: String? = null, val taskId: String? = null, val fileAction: String? = null)
+
 class DownloadsViewModel(application: Application) : AndroidViewModel(application) {
     private val controller = DownloadRuntime.controller(application)
-    val state = controller.state
+    private val preferences = DownloadRuntime.preferences(application)
+    private val files = DownloadFiles(application, controller)
+    val tasks = controller.tasks
+    val loaded = controller.loaded
     private val mutableError = MutableStateFlow<String?>(null)
+    val settings = preferences.settings.catch {
+        mutableError.value = "Unable to load settings. Check storage before starting a download."
+        emit(DownloadSettings())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DownloadSettings())
     val error = mutableError.asStateFlow()
     private val mutableBusy = MutableStateFlow(false)
     val busy = mutableBusy.asStateFlow()
+    val incoming = MutableStateFlow<IncomingDownload?>(null)
+    val deletionConsent = MutableStateFlow<android.content.IntentSender?>(null)
+    private var pendingDeletion: Pair<String, Boolean>? = null
     var askedNotificationPermission = false
     private var pendingRequest: Pair<String, String>? = null
 
+    init {
+        viewModelScope.launch {
+            controller.loaded.first { it }
+            if (controller.tasks.value.isEmpty()) controller.state.value.message?.let { mutableError.value = it }
+        }
+    }
+
+    fun receive(intent: Intent) {
+        if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+            incoming.value = IncomingDownload(text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().trim())
+        } else intent.getStringExtra("taskId")?.let {
+            incoming.value = IncomingDownload(taskId = it, fileAction = intent.getStringExtra("fileAction"))
+        }
+    }
     fun prepare(url: String, name: String) { pendingRequest = url to name }
-    fun startPending() {
+    fun startPending(onAdded: () -> Unit) {
         val request = pendingRequest ?: return
         pendingRequest = null
-        act { controller.start(request.first, request.second) }
+        act(true) {
+            controller.enqueue(request.first, request.second, preferences.read())
+            onAdded()
+        }
     }
-    fun pause() = act { controller.pause() }
-    fun resume() = act { controller.resume() }
-    fun cancel() = act { controller.cancel() }
-    fun retrySaving() = act { controller.retrySaving() }
-
-    private fun act(action: suspend () -> Unit) {
-        if (mutableBusy.value) return
-        mutableBusy.value = true
+    fun pause(id: String) = act { controller.pauseTask(id) }
+    fun resume(id: String) = act { controller.resumeTask(id, preferences.read()) }
+    fun cancel(id: String) = act { controller.cancelTask(id) }
+    fun retry(id: String) = act { controller.retry(id, preferences.read()) }
+    fun retrySaving(id: String) = act { controller.retrySavingTask(id) }
+    fun saveSettings(value: DownloadSettings, onSaved: () -> Unit) = act(true) {
+        preferences.save(value)
+        controller.applySettings(value)
+        onSaved()
+    }
+    fun delete(id: String, publicFile: Boolean) = act(true) {
+        val sender = files.delete(id, publicFile)
+        if (sender != null) {
+            pendingDeletion = id to publicFile
+            deletionConsent.value = sender
+        } else pendingDeletion = null
+    }
+    fun deletionResult(approved: Boolean) {
+        deletionConsent.value = null
+        val pending = pendingDeletion
+        pendingDeletion = null
+        if (approved && pending != null) delete(pending.first, pending.second)
+        else if (!approved) showError("File deletion was declined. The history entry was kept.")
+    }
+    fun open(task: DownloadTask, share: Boolean, launch: (Intent) -> Unit) = act {
+        val intent = withContext(Dispatchers.IO) { files.intent(task, share) }
+        launch(intent)
+    }
+    fun clearError() { mutableError.value = null }
+    fun showError(message: String) { mutableError.value = message }
+    private fun act(exclusive: Boolean = false, action: suspend () -> Unit) {
+        if (exclusive && mutableBusy.value) return
+        if (exclusive) mutableBusy.value = true
         mutableError.value = null
         viewModelScope.launch {
             try { action() }
             catch (canceled: CancellationException) { throw canceled }
             catch (error: IllegalArgumentException) { mutableError.value = error.message ?: "Check the URL and filename." }
-            catch (_: Exception) { mutableError.value = "Unable to update the download. Check available storage and try again." }
-            finally { mutableBusy.value = false }
+            catch (_: android.content.ActivityNotFoundException) { mutableError.value = "No app can open this file. Try Share instead." }
+            catch (_: java.io.FileNotFoundException) { mutableError.value = "File is no longer available in Downloads." }
+            catch (_: Exception) { mutableError.value = "Unable to apply this action. Check storage and try again; your saved data is preserved." }
+            finally { if (exclusive) mutableBusy.value = false }
         }
     }
-}
-
-@Composable
-internal fun DownloadsScreen(model: DownloadsViewModel = viewModel()) {
-    val state by model.state.collectAsStateWithLifecycle()
-    val error by model.error.collectAsStateWithLifecycle()
-    val busy by model.busy.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    var url by rememberSaveable { mutableStateOf("") }
-    var name by rememberSaveable { mutableStateOf("download") }
-    var denied by rememberSaveable { mutableStateOf(false) }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        denied = !granted
-        model.startPending()
-    }
-    Scaffold { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())
-            .padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(stringResource(R.string.downloads_title), style = MaterialTheme.typography.headlineLarge)
-            Text("Download one file at a time. Completed files are saved to Downloads/Aria.",
-                style = MaterialTheme.typography.bodyMedium)
-            OutlinedTextField(url, { url = it }, label = { Text("HTTP or HTTPS URL") },
-                modifier = Modifier.fillMaxWidth(), enabled = state.canStart && !busy,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true)
-            OutlinedTextField(name, { name = it }, label = { Text("Filename") },
-                modifier = Modifier.fillMaxWidth(), enabled = state.canStart && !busy, singleLine = true)
-            Button(enabled = state.canStart && !busy && url.isNotBlank() && name.isNotBlank(), onClick = {
-                model.prepare(url, name)
-                if (!model.askedNotificationPermission && context.checkSelfPermission(
-                        Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    model.askedNotificationPermission = true
-                    permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else model.startPending()
-            }) { Text("Start download") }
-            if (state.status == DownloadStatus.IDLE) {
-                Text("No downloads yet", style = MaterialTheme.typography.titleLarge)
-            } else {
-                Text(state.fileName, style = MaterialTheme.typography.titleLarge)
-                Text(statusLabel(state.status))
-                if (state.status == DownloadStatus.EXPORTING) {
-                    LinearProgressIndicator(progress = {
-                        if (state.completedBytes > 0) (state.savedBytes.toDouble() / state.completedBytes).toFloat().coerceIn(0f, 1f) else 0f
-                    }, modifier = Modifier.fillMaxWidth())
-                }
-                if (state.canPause) {
-                    if (state.totalBytes > 0) {
-                        LinearProgressIndicator(progress = {
-                            (state.completedBytes.toDouble() / state.totalBytes).toFloat().coerceIn(0f, 1f)
-                        }, modifier = Modifier.fillMaxWidth())
-                    } else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                if (state.completedBytes > 0 || state.totalBytes > 0) Text(transferDescription(state, context))
-                state.message?.let { Text(it) }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (state.canPause) OutlinedButton(onClick = model::pause, enabled = !busy) { Text("Pause") }
-                    if (state.canResume) Button(onClick = model::resume, enabled = !busy) { Text("Resume") }
-                    if (state.canRetrySaving) Button(onClick = model::retrySaving, enabled = !busy) { Text("Retry saving") }
-                    if (state.canCancel) OutlinedButton(onClick = model::cancel, enabled = !busy) { Text("Cancel") }
-                }
-            }
-            if (denied) Text("Notifications are disabled. Use this screen to pause or cancel your transfer.")
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        }
-    }
-}
-
-private fun statusLabel(status: DownloadStatus): String = when (status) {
-    DownloadStatus.IDLE -> "Ready"
-    DownloadStatus.SCHEDULED -> "Waiting to start"
-    DownloadStatus.DOWNLOADING -> "Downloading"
-    DownloadStatus.WAITING -> "Waiting for network or Android"
-    DownloadStatus.PAUSED -> "Paused"
-    DownloadStatus.STAGED -> "Ready to save"
-    DownloadStatus.EXPORTING -> "Saving to Downloads…"
-    DownloadStatus.SAVE_FAILED -> "Saving failed · Staged file preserved"
-    DownloadStatus.COMPLETED -> "Saved to Downloads"
-    DownloadStatus.FAILED -> "Failed"
-    DownloadStatus.CANCELED -> "Canceled"
-    DownloadStatus.INTERRUPTED -> "Interrupted"
-}
-
-private fun transferDescription(state: DownloadState, context: android.content.Context): String {
-    val completed = Formatter.formatShortFileSize(context, state.completedBytes)
-    val total = if (state.totalBytes > 0) " / ${Formatter.formatShortFileSize(context, state.totalBytes)}" else ""
-    val speed = if (state.bytesPerSecond > 0) " · ${Formatter.formatShortFileSize(context, state.bytesPerSecond)}/s" else ""
-    return completed + total + speed
 }

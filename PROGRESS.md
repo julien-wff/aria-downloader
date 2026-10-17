@@ -1,5 +1,79 @@
 # Development progress
 
+## 2026-10-17 - Core product UI and concurrent queue
+
+Status: milestone 4 implemented and verified on API 37, including two-transfer
+process-death recovery and public-file hashes.
+The user explicitly authorized advancing to milestone 4 after milestone 3 verification.
+
+### Implemented
+
+- Added Downloads, History, Settings, reviewed single-URL add/share intake and task
+  details, with phone bottom navigation and a wide-window rail/list/detail layout.
+  Lists support filename search and status filters. Tasks expose progress, speed,
+  ETA, pause/resume, confirmed cancel/delete, Retry and Retry saving.
+- Replaced newest-only coordination with a FIFO queue and task-ID commands, retaining
+  the single-task compatibility API for existing tests. Concurrency is configurable
+  from one to six (default three); native session configuration matches admission.
+- Added non-destructive Room v1→v2 migration, all-row loading, atomic batch membership,
+  durable connection/speed defaults and sanitized errors. Visible actions replace
+  UIDT batches with fresh tokens; startup never schedules work. Pausing one task
+  releases its slot without stopping unrelated tasks. Completion racing replacement
+  is reconciled before native resume.
+- Moved restartable MediaStore export outside the coordinator lock into a serialized
+  worker. Network completion releases its queue slot while export continues. Saving
+  failures preserve staging and destination identity; only publication is Completed.
+- Added pinned DataStore preferences for concurrency, connections, per-download speed,
+  unmetered Wi-Fi policy and system/light/dark appearance. Default option and appearance
+  changes do not interrupt current transfers. Network/concurrency changes reconcile
+  the queue under visible authorization.
+- Added grouped task notifications with immutable task/token controls, a UIDT summary,
+  and completed-file Open/Share actions. Detached summaries preserve paused/result
+  child notifications. Historical results are not reposted wholesale on startup.
+- Added MIME-aware Open/Share with temporary grants, and confirmed deletion with an
+  optional public-file checkbox. Declined consent or file deletion failure preserves
+  the record; explicit deletion cleans private staging after stopping native work.
+- Extended JVM/device coverage and the opt-in host recovery harness to kill two live
+  transfers, verify both non-zero range resumes, and hash both distinct public files.
+
+### Verification status
+
+- Build, lint, all 45 JVM tests (39 downloads, 6 native) and all 17 app/storage
+  device tests (5 app, 12 downloads) passed on Samsung SM-S948B, Android 17/API 37:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :downloads:testDebugUnitTest :aria2:testDebugUnitTest \
+    :app:connectedDebugAndroidTest :downloads:connectedDebugAndroidTest
+  ```
+
+- The six native device tests also passed during the earlier combined run with
+  `NativeEngineTest#fullLargeFileHash` excluded. Across these runs, all 23 default
+  device tests passed. The AGP result listener printed a nonfatal reporting warning
+  during the successful combined run; the device XML records zero failures/errors.
+- The two-transfer SIGKILL harness passed against the verified engine/coordinator:
+
+  ```sh
+  python3 tools/test-process-recovery.py --adb /home/julien/Android/Sdk/platform-tools/adb
+  ```
+
+  Both transfers had live native checkpoints when the host killed the process.
+  Recovery reused both identities, issued non-zero range requests for each task,
+  published two distinct files and verified both SHA-256 hashes. Recovery completed
+  in 48 seconds. The seed runner's process-crash output is intentional. Server and
+  ADB reverse mapping cleanup completed.
+- A phone screenshot exposed a fixed-header problem in short landscape windows.
+  Navigation now uses a rail from 600 dp, list/detail from 840 dp, and the list header
+  scrolls with the task rows. The final UI adjustment passed build, lint and all five
+  app device tests:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:connectedDebugAndroidTest
+  ```
+- API 35 fallback rendering, full tablet/large-font/TalkBack review, actual permission
+  denial and public-file deletion consent dialogs remain manual checks. The 16 KiB
+  runtime and opt-in 4 GiB checks were not rerun. Real disk exhaustion remains
+  simulated by fault-injection tests rather than induced on the user's phone.
+
 ## 2026-10-17 - Persistence and public Downloads export
 
 Status: milestone 3 implemented and verified on API 37, including abrupt

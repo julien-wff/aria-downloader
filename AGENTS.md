@@ -17,8 +17,9 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 3 is current: Room recovery, native checkpoints and public Downloads export,
-while retaining the single-download UI. Remaining milestone 2 acceptance gates do
-not block advancement (explicit user decision); build, lint and relevant tests
-still apply to new work. Completion means successful MediaStore publication.
-Staged or export-failed files must never be presented as publicly saved files.
+Milestone 4 is current: core Compose UI, concurrent queue, task details, history,
+settings and share-sheet intake. The user explicitly authorized advancing after
+milestone 3 verification. Retain Room recovery, native checkpoints and restartable
+public Downloads export. Remaining earlier acceptance gates do not block advancement;
+build, lint and relevant tests still apply. Completion means successful MediaStore
+publication. Staged or export-failed files must never be presented as publicly saved.

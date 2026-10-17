@@ -1,8 +1,9 @@
 # Embedded engine development
 
 This documents the milestone 1 engine in `plan.md`. `:aria2` packages an
-in-process engine; milestone 2's `:downloads` coordinator now supplies UIDT
-execution authorization for the application's single-download controls.
+in-process engine; milestone 4's `:downloads` coordinator supplies UIDT
+batch authorization and FIFO admission for concurrent downloads. Configure native
+concurrency (1–6, default 3) only while the engine is stopped.
 
 ## Build
 
