@@ -17,5 +17,5 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-The current bootstrap has no download engine. Do not present placeholder UI as a
-working download feature.
+The native engine is currently exercised through tests and is not wired into the
+application UI. Do not present placeholder UI as a working download feature.

@@ -1,5 +1,61 @@
 # Development progress
 
+## 2026-10-17 - Embedded native engine
+
+Status: milestone 1 implementation and 4 KiB device verification complete;
+16 KiB runtime acceptance remains pending.
+The application UI remains the bootstrap empty state. Background execution,
+Room recovery and public Downloads export are not implemented.
+
+### Implemented
+
+- Added checksum-verified native release builds for arm64-v8a and x86_64, using
+  pinned NDK/CMake versions and bundled OpenSSL, c-ares, Expat and zlib.
+- Enabled HTTP/HTTPS, compression, asynchronous DNS, BitTorrent and Metalink in
+  libaria2. The Kotlin API currently accepts HTTP/HTTPS only, with automatic
+  torrent/Metalink following and RPC listeners disabled.
+- Added the Kotlin engine contract, single-thread command owner, immutable
+  progress snapshots, JNI exception translation, private staging paths,
+  pause/resume, cancellation, option updates and session checkpoints.
+  Native library initialization is process-wide; sessions are finalized separately.
+- Added platform system CA export with certificate/hostname verification enabled.
+  Native DNS uses the active Android network's servers at session creation.
+- Added JVM lifecycle/validation tests and controlled loopback instrumentation
+  fixtures, including TLS rejection, content hashes, resume and large files.
+- Added APK alignment/dependency verification and NixOS/native setup guidance in
+  [aria2/native/README.md](aria2/native/README.md).
+
+### Verification status
+
+- Both native ABIs built successfully from the pinned archives.
+- Final command passed with the phone's mDNS serial selected through
+  `ANDROID_SERIAL`:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :aria2:testDebugUnitTest \
+    :aria2:connectedDebugAndroidTest :app:connectedDebugAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.largeFile=true
+  ```
+
+- All four JVM tests, all seven native instrumentation tests and the app launch
+  smoke test passed. Device: arm64-v8a, API 37, `getconf PAGE_SIZE = 4096`.
+  The native suite verified actual SHA-256 content for a 4 GiB + 64 KiB transfer,
+  HTTPS, range resume/checkpoints, redirects and unknown lengths. It also checked
+  expired/wrong-host/untrusted TLS rejection, sanitized exceptions, and preserved
+  partial data when a server rejects resume.
+- APK ELF dependency checks, 16 KiB LOAD alignment and `zipalign -P 16` passed
+  for all packaged libraries in both supported ABIs.
+- Android test runner and Espresso versions are explicitly pinned. AGP 9.4.1
+  reports a false failed task for IP:port device serials because of an encoded
+  JUnit result-key mismatch; the final command passed using the mDNS serial.
+- 16 KiB runtime acceptance remains pending: no emulator image was installed.
+  Downloading the API 35 16 KiB image into `/tmp` was paused because of slow
+  network transfer. Install `system-images;android-35;google_apis_ps16k;x86_64`
+  and run the instrumented suite on that emulator before closing milestone 1.
+
+Do not advance to background execution until the native acceptance gates in
+`plan.md` have been verified.
+
 ## 2026-10-12 - Project bootstrap
 
 Status: foundation implemented and build verified. Device verification remains

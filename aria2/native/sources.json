@@ -1,0 +1,7 @@
+{
+  "aria2": {"url": "https://github.com/aria2/aria2/releases/download/release-{version}/aria2-{version}.tar.xz", "sha256": "60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b", "license": "GPL-2.0-or-later with OpenSSL exception"},
+  "openssl": {"url": "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz", "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a", "license": "Apache-2.0"},
+  "cares": {"url": "https://github.com/c-ares/c-ares/releases/download/v{version}/c-ares-{version}.tar.gz", "sha256": "c222b6d681096f9444d2c4863d2c1174019e27cacca0a4a5c114d36dd7d7bf78", "license": "MIT"},
+  "expat": {"url": "https://github.com/libexpat/libexpat/releases/download/R_{underscore}/expat-{version}.tar.xz", "sha256": "1e6371862cc31999b368c3b89b49994f0677e1bab5f1b2b85ae3741f5d803051", "license": "MIT"},
+  "zlib": {"url": "https://zlib.net/fossils/zlib-{version}.tar.gz", "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16", "license": "Zlib"}
+}

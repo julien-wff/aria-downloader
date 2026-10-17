@@ -5,6 +5,7 @@ plugins {
 
 android {
     namespace = "com.julien_wff.aria_android"
+    ndkVersion = libs.versions.ndk.get()
     compileSdk {
         version = release(37)
     }
@@ -15,6 +16,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -46,5 +48,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.junit)
 }
