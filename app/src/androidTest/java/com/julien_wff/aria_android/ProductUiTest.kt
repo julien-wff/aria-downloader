@@ -217,6 +217,15 @@ class ProductUiTest {
                 compose.onAllNodesWithText("Cancel download")[0].performClick()
                 withTimeout(10_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.status == DownloadStatus.CANCELED } } }
                 compose.onNodeWithText("Canceled").assertIsDisplayed()
+                compose.onNodeWithText("Preview diagnostics").performScrollTo().performClick()
+                compose.onNodeWithText("Diagnostics preview").assertIsDisplayed()
+                val report = compose.onNode(hasText("Aria Downloader diagnostics", substring = true)).fetchSemanticsNode()
+                    .config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString { it.text }
+                assertFalse(report.contains(name))
+                assertFalse(report.contains(server.url))
+                compose.onNodeWithText("Share").assertIsDisplayed()
+                compose.onNodeWithText("Close").performClick()
+                compose.onNodeWithText("Diagnostics preview").assertDoesNotExist()
             } finally {
                 id?.let { controller.cancelTask(it) }
                 preferences.save(oldSettings)

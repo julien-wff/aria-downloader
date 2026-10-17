@@ -17,6 +17,7 @@ class NativeDownloadEngineTest {
         var opens = 0
         var shutdowns = 0
         var complete = false
+        @Volatile var failId: String? = null
         private fun owner() { owners += Thread.currentThread().threadId() }
         override fun open(options: Array<String>) { owner(); opens++; states.clear(); sessionOptions = options.toList().chunked(2).associate { it[0] to it[1] } }
         override fun add(id: String, url: String, options: Array<String>) {
@@ -31,6 +32,7 @@ class NativeDownloadEngineTest {
         override fun update(id: String, options: Array<String>) { owner() }
         override fun tick() {
             owner()
+            failId?.let { id -> states.getValue(id)[0] = 4; states.getValue(id)[4] = 6; failId = null }
             if (complete) states.values.forEach { it[0] = 3 }
             Thread.sleep(2)
         }
@@ -58,6 +60,34 @@ class NativeDownloadEngineTest {
             engine.start()
             engine.resume(engine.snapshots.value.tasks.single().id)
             assertEquals("2", backend.sessionOptions["max-concurrent-downloads"])
+        } finally { engine.close(); root.deleteRecursively() }
+    }
+
+    @Test fun restartingFailedTaskPreservesFilesOptionsAndSiblingStates() = runBlocking {
+        val root = Files.createTempDirectory("aria-retry-test").toFile()
+        val backend = FakeNative()
+        val engine = engine(root, backend)
+        try {
+            engine.start()
+            val id = engine.add(EngineRequest("https://example.org/file", "file.bin",
+                EngineOptions(referrer = "https://example.org/page", userAgent = "Custom/1.0")))
+            val running = engine.add(EngineRequest("https://example.org/other"))
+            val paused = engine.add(EngineRequest("https://example.org/paused"))
+            engine.pause(paused)
+            val file = File(root, "${id.value}/file.bin").apply { writeText("partial") }
+            val checkpoint = File(root, "${id.value}/file.bin.aria2").apply { writeText("checkpoint") }
+            backend.failId = id.value
+            withTimeout(5000) { engine.snapshots.first { it.tasks.any { it.id == id && it.state == EngineTaskState.FAILED } } }
+            engine.restart(id)
+            assertEquals("partial", file.readText())
+            assertEquals("checkpoint", checkpoint.readText())
+            assertEquals(EngineTaskState.PAUSED, engine.snapshots.value.tasks.first { it.id == paused }.state)
+            assertTrue(engine.snapshots.value.tasks.first { it.id == running }.state in setOf(EngineTaskState.QUEUED, EngineTaskState.DOWNLOADING))
+            val options = backend.additions.last { it["out"] == "file.bin" }
+            assertEquals(file.parentFile!!.canonicalPath, options["dir"])
+            assertEquals("Custom/1.0", options["user-agent"])
+            assertEquals("1", backend.sessionOptions["max-tries"])
+            assertEquals(1, backend.owners.size)
         } finally { engine.close(); root.deleteRecursively() }
     }
 

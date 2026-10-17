@@ -80,6 +80,42 @@ class QueuePersistenceTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun v3MigrationPreservesHeadersFilesAndAddsDurableRetryDefaults() = runBlocking {
+        val root = File(context.cacheDir, "migration-v3-${System.nanoTime()}").apply { mkdirs() }
+        val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }
+        try {
+            SQLiteDatabase.openOrCreateDatabase(File(root, "transfers.db"), null).use { db ->
+                db.execSQL("CREATE TABLE IF NOT EXISTS `transfers` (`token` TEXT NOT NULL, `url` TEXT NOT NULL, `fileName` TEXT NOT NULL, `desired` TEXT NOT NULL, `status` TEXT NOT NULL, `id` TEXT NOT NULL, `taskId` TEXT, `completedBytes` INTEGER NOT NULL, `totalBytes` INTEGER NOT NULL, `publishedUri` TEXT, `createdAt` INTEGER NOT NULL, `connections` INTEGER NOT NULL DEFAULT 4, `speedLimit` INTEGER NOT NULL DEFAULT 0, `failure` TEXT DEFAULT NULL, `batchConcurrency` INTEGER NOT NULL DEFAULT 3, `batchWifiOnly` INTEGER NOT NULL DEFAULT 0, `referrer` TEXT DEFAULT NULL, `userAgent` TEXT DEFAULT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)")
+                db.execSQL("INSERT INTO room_master_table VALUES (42, '095ae40fabe743c46c5f0330c91123da')")
+                db.execSQL("INSERT INTO transfers (token, url, fileName, desired, status, id, taskId, completedBytes, totalBytes, publishedUri, createdAt, referrer, userAgent) VALUES ('batch', 'https://example.org/file', 'file', 'RUNNING', 'COMPLETED', 'existing', '0123456789abcdef', 5000000000, 5000000000, 'content://downloads/1', 1, 'https://example.org/page', 'Custom/1.0')")
+                db.version = 3
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val row = store.readAll().single()
+                assertEquals(0, row.retryCount)
+                assertEquals(0L, row.retryAt)
+                assertNull(row.engineCode)
+                assertNull(row.stopReason)
+                assertNull(row.failureCategory)
+                assertEquals("https://example.org/page", row.referrer)
+                assertEquals("Custom/1.0", row.userAgent)
+                assertEquals("content://downloads/1", row.publishedUri)
+                assertEquals(5_000_000_000L, row.completedBytes)
+                store.write(row.copy(status = DownloadStatus.WAITING, retryCount = 2, retryAt = 123456,
+                    failureCategory = "NETWORK", engineCode = 6, stopReason = 7))
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val row = store.readAll().single()
+                assertEquals(2, row.retryCount)
+                assertEquals(123456L, row.retryAt)
+                assertEquals("NETWORK", row.failureCategory)
+                assertEquals(6, row.engineCode)
+                assertEquals(7, row.stopReason)
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun settingsPersistAndValidate() = runBlocking {
         val preferences = DownloadPreferences(context)
         val old = preferences.read()

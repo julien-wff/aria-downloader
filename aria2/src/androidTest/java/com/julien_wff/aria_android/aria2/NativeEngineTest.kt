@@ -10,6 +10,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Collections
 import java.util.concurrent.Executors
 import javax.net.ssl.KeyManagerFactory
@@ -56,6 +57,31 @@ class NativeEngineTest {
             assertFalse(error.message.orEmpty().contains("secret-token-value"))
         }
         // Subsequent instrumented transfers also assert that initialization can recover.
+    }
+
+    @Test fun failedResumeCanRestartWithSameStagingAndHash() = runBlocking {
+        val root = root()
+        val engine = engine(root)
+        try {
+            FixtureServer().use { server ->
+                engine.start()
+                val id = engine.add(EngineRequest(server.url("/slow"), "retry.bin", EngineOptions(connectionsPerServer = 1)))
+                withTimeout(30_000) { engine.snapshots.first { it.tasks.any { it.id == id && it.completedBytes > 128 * 1024 } } }
+                engine.pause(id)
+                val partial = File(root, "${id.value}/retry.bin")
+                assertTrue(partial.exists())
+                assertTrue(File(root, "${id.value}/retry.bin.aria2").exists())
+                server.failNext.set(true)
+                engine.resume(id)
+                val failed = engine.await(id, EngineTaskState.FAILED)
+                assertEquals(29, failed.errorCode)
+                assertTrue(partial.exists())
+                engine.restart(id)
+                engine.await(id, EngineTaskState.COMPLETED)
+                assertArrayEquals(server.hash(), MessageDigest.getInstance("SHA-256").digest(partial.readBytes()))
+                assertTrue(server.receivedHeaders.any { it["range"]?.startsWith("bytes=0-") == false })
+            }
+        } finally { engine.close(); root.deleteRecursively() }
     }
 
     @Test fun perDownloadHeadersReachTheHttpServer() = runBlocking {
@@ -206,6 +232,7 @@ class NativeEngineTest {
     }
 
     private inner class FixtureServer(certificate: String? = null, val length: Long = 2L * 1024 * 1024) : Closeable {
+        val failNext = AtomicBoolean(false)
         val receivedHeaders = Collections.synchronizedList(mutableListOf<Map<String, String>>())
         private val block = ByteArray(8192) { (it % 251).toByte() }
         private val executor = Executors.newCachedThreadPool()
@@ -263,6 +290,10 @@ class NativeEngineTest {
             }
             receivedHeaders += headers.toMap()
             val output = client.getOutputStream()
+            if (failNext.compareAndSet(true, false)) {
+                output.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                return
+            }
             Log.i("AriaFixture", "$path range=${headers["range"]}")
             if (path == "/redirect") {
                 output.write("HTTP/1.1 302 Found\r\nLocation: /file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())

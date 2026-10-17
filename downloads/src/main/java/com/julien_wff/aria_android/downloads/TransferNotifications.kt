@@ -142,7 +142,7 @@ internal class TransferNotifications(
     private fun description(state: DownloadState): String {
         if (state.status != DownloadStatus.DOWNLOADING) return when (state.status) {
             DownloadStatus.SCHEDULED -> "Waiting to start"
-            DownloadStatus.WAITING -> "Waiting for network or system permission to run"
+            DownloadStatus.WAITING -> state.message ?: "Waiting for network or system permission to run"
             DownloadStatus.PAUSED -> "Paused · Tap Resume to open the app"
             DownloadStatus.STAGED -> "Ready to save to Downloads"
             DownloadStatus.EXPORTING -> "Saving to Downloads…"

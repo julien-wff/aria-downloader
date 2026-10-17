@@ -1,5 +1,113 @@
 # Development progress
 
+## 2026-10-17 - Milestone 5 reliability hardening
+
+Status: implementation complete; device acceptance is recorded below. The user
+explicitly authorized the full milestone 5 plan.
+
+### Implemented
+
+- Added three automatic retries after 5, 15 and 45 seconds for temporary timeout,
+  connection, DNS and server-busy errors. Room v4 stores the budget, deadline,
+  failure category, engine code and last known Android stop reason. Backoff releases
+  queue slots; pause/cancel, stale leases and failed persistence cannot launch retries.
+- Added native failed-task restart using the original request, staging identity,
+  file and checkpoint. Session recreation preserves sibling running/paused states;
+  native retry loops are disabled so the coordinator owns the bounded policy.
+- Bound native traffic to the UIDT job's assigned network. Network callbacks refresh
+  the binding, session and DNS, including changes during retry backoff. Constraint
+  stops preserve running intent and show actionable network/system explanations.
+- Added reboot/user-stop detection using boot count and process exit history. Those
+  recoveries pause tasks and fence previous tokens. Startup never schedules work;
+  unknown interruptions are described without guessing their cause.
+- Retained transfers and in-app controls when notification permission is denied,
+  with persistent in-app status and a notification-settings shortcut. Details show
+  retry/error information and a previewable, explicitly shared diagnostics report.
+  Reports include only allowlisted structured fields, excluding request data,
+  filenames, credentials, tokens, paths and raw exceptions.
+- Extended the two-transfer host recovery harness with force-stop and Task Manager
+  Stop scenarios. Updated current milestone instructions and documented behavior,
+  commands and manual acceptance in [docs/reliability.md](docs/reliability.md).
+
+### Verification
+
+- Build, lint and all 74 JVM tests passed on the final sources (10 app, 55 downloads,
+  9 native). The full command below also completed successfully earlier in this
+  milestone on Samsung SM-S948B, Android 17/API 37 (73 JVM tests before the final
+  early-network-callback regression was added):
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest connectedDebugAndroidTest
+  ```
+
+- Device coverage passed all 14 downloads tests, eight default native tests and
+  ten app tests. The opt-in 4 GiB test and locked-device clipboard check were skipped.
+  The native and end-to-end tests verify HTTP 503 recovery, original staging/control
+  identity, non-zero range resume and file hashes. The app test uses actual denied
+  notification permission and verifies successful MediaStore publication.
+- The final rerun below passed build/lint/JVM tasks, retry/publication and diagnostics
+  preview coverage, but the command failed on the existing keyboard test's 10-second
+  IME visibility wait on the locked phone. That keyboard case passed in the earlier
+  full run; clipboard remained skipped. The rerun is not claimed as fully passing:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest :app:connectedDebugAndroidTest
+  ```
+
+- The abrupt process-kill harness passed against the final APKs:
+
+  ```sh
+  python3 tools/test-process-recovery.py --adb /home/julien/Android/Sdk/platform-tools/adb
+  ```
+
+  Both live transfers had native checkpoints before SIGKILL. A new process reused
+  their identities, issued non-zero range requests, published distinct files and
+  verified both SHA-256 hashes. Recovery took 86 seconds. Seed instrumentation's
+  process-crash result is intentional; server and ADB reverse mapping were cleaned up.
+
+- The force-stop harness also passed:
+
+  ```sh
+  python3 tools/test-process-recovery.py --adb /home/julien/Android/Sdk/platform-tools/adb --stop-mode force-stop
+  ```
+
+  Reopening left both tasks paused with unchanged byte counts. Explicit Resume then
+  recovered both files using non-zero ranges and verified their published hashes in
+  83 seconds. The old authorization was fenced; cleanup completed.
+- Final review added a guard for network callbacks arriving before engine startup,
+  plus a regression that delays Room loading while authorization is pending. Final
+  build/lint, all 74 JVM tests and instrumentation compilation passed with:
+
+  ```sh
+  ./gradlew assembleDebug lintDebug :app:testDebugUnitTest \
+    :downloads:testDebugUnitTest :aria2:testDebugUnitTest :app:assembleDebugAndroidTest
+  ```
+
+- Task Manager Stop verification passed after the phone reconnected:
+
+  ```sh
+  python3 tools/test-process-recovery.py --adb /home/julien/Android/Sdk/platform-tools/adb --stop-mode task-manager
+  ```
+
+  Both transfers remained paused with unchanged byte counts after reopening. Explicit
+  Resume reused their staging identities, issued non-zero range requests, published
+  distinct files and verified both SHA-256 hashes. Recovery took 50.104 seconds;
+  server and ADB reverse mapping cleanup completed. The killed seed runner's crash
+  output is intentional. Two earlier attempts had been blocked during APK installation
+  by wireless ADB connectivity; the harness now includes ADB stderr in failures.
+- After the phone reconnected, a direct instrumentation rerun of
+  `ProductUiTest#keyboardFormsAndAutosaveSurviveNavigationAndRecreation` and
+  `ProductUiTest#clipboardPrefillsNewDownloadButNeverOverwritesDraftOrShareIntake`
+  passed with no skips: `OK (2 tests)`, 6.741 seconds. All 33 default device tests
+  have now passed across the milestone's runs; the opt-in 4 GiB case remains excluded.
+  No reboot or device network settings were changed.
+- Physical reboot, actual Wi-Fi/mobile/offline transitions and Android 15 remain
+  manual acceptance checks. The connected phone uses Wi-Fi ADB, so network toggles
+  and reboot were not induced. Earlier 16 KiB runtime and 4 GiB acceptance gates were
+  not rerun. These checks remain unverified; they do not block advancement.
+
 ## 2026-10-17 - Per-download HTTP options
 
 - Follow-up verification with the reconnected Samsung SM-S948B:

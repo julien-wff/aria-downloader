@@ -8,6 +8,7 @@ import java.util.UUID
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import com.julien_wff.aria_android.aria2.EngineOptions
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import androidx.room.PrimaryKey
 import kotlinx.coroutines.CompletableDeferred
@@ -33,6 +34,11 @@ data class DownloadState(
     val message: String? = null,
     val publishedUri: String? = null,
     val savedBytes: Long = 0,
+    val retryCount: Int = 0,
+    val retryAt: Long = 0,
+    val failureCategory: String? = null,
+    val engineCode: Int? = null,
+    val stopReason: Int? = null,
 ) {
     val canStart: Boolean get() = status in setOf(
         DownloadStatus.IDLE, DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED,
@@ -66,6 +72,11 @@ internal data class TransferRecord(
     @ColumnInfo(defaultValue = "0") val batchWifiOnly: Boolean = false,
     @ColumnInfo(defaultValue = "NULL") val referrer: String? = null,
     @ColumnInfo(defaultValue = "NULL") val userAgent: String? = null,
+    @ColumnInfo(defaultValue = "0") val retryCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val retryAt: Long = 0,
+    @ColumnInfo(defaultValue = "NULL") val failureCategory: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val engineCode: Int? = null,
+    @ColumnInfo(defaultValue = "NULL") val stopReason: Int? = null,
 )
 
 internal interface TransferStore {
@@ -83,7 +94,12 @@ internal interface TransferScheduler {
 }
 
 /** Each JobService invocation gets its own lease, even when JobScheduler retries the same job. */
-internal class ExecutionLease(val token: String, val finish: () -> Unit)
+internal class ExecutionLease(
+    val token: String,
+    val prepareNetwork: () -> Unit = {},
+    val releaseNetwork: () -> Unit = {},
+    val finish: () -> Unit,
+)
 
 /** Public UI projection; URLs are deliberately stripped of credentials, query and fragment. */
 data class DownloadTask(
@@ -104,6 +120,8 @@ class DownloadController internal constructor(
     private val scheduler: TransferScheduler,
     private val scope: CoroutineScope,
     private val exporter: TransferExporter? = null,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val requireExplicitResume: Boolean = false,
 ) {
     private val mutex = Mutex()
     private val exportMutex = Mutex()
@@ -112,6 +130,8 @@ class DownloadController internal constructor(
     private val registered = mutableMapOf<String, EngineTaskId>()
     private val active = mutableSetOf<String>()
     private val exporting = mutableMapOf<String, Job>()
+    private var retryWake: Job? = null
+    private var boundExecution: ExecutionLease? = null
     private val lastWrites = mutableMapOf<String, Long>()
     private val ready = CompletableDeferred<Unit>()
     private var loadFailure: Exception? = null
@@ -135,7 +155,12 @@ class DownloadController internal constructor(
             try {
                 mutex.withLock {
                     val saved = store.readAll().sortedWith(compareBy<TransferRecord> { it.createdAt }.thenBy { it.id })
-                    saved.forEach { record ->
+                    saved.forEach { savedRecord ->
+                        val record = if (requireExplicitResume && savedRecord.status in runnable && savedRecord.desired == DesiredState.RUNNING) {
+                            savedRecord.copy(token = "", desired = DesiredState.PAUSED, status = DownloadStatus.PAUSED,
+                                failure = "Transfer interrupted by a restart or user stop. Resume to continue.")
+                                .also { store.write(it) }
+                        } else savedRecord
                         records[record.id] = record
                         val status = when {
                             record.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.CANCELED, DownloadStatus.FAILED) -> record.status
@@ -146,12 +171,12 @@ class DownloadController internal constructor(
                         }
                         views[record.id] = record.view(status).copy(message = when (status) {
                             DownloadStatus.INTERRUPTED -> "Legacy staging has no recovery mapping. Data is preserved; cancel to remove the task."
-                            DownloadStatus.WAITING -> "Resume to continue, or wait for Android to retry the existing job."
+                            DownloadStatus.WAITING -> "Transfer interrupted. Resume to continue, or wait for Android to retry its existing job."
                             DownloadStatus.SAVE_FAILED -> "Saving interrupted. Staged data is preserved; retry saving."
                             else -> record.failure
                         })
                     }
-                    saved.lastOrNull { it.token.isNotEmpty() && it.desired == DesiredState.RUNNING && it.status in runnable }?.let {
+                    records.values.lastOrNull { it.token.isNotEmpty() && it.desired == DesiredState.RUNNING && it.status in runnable }?.let {
                         authorizationToken = it.token
                         batchConcurrency = it.batchConcurrency
                         batchWifiOnly = it.batchWifiOnly
@@ -184,9 +209,14 @@ class DownloadController internal constructor(
                                 EngineTaskState.FAILED -> DownloadStatus.FAILED
                                 else -> continue
                             }
+                            if (status == DownloadStatus.FAILED) {
+                                save(failed(current.copy(completedBytes = task.completedBytes,
+                                    totalBytes = task.totalBytes), task.errorCode))
+                                active.remove(id)
+                                continue
+                            }
                             val next = current.copy(status = status, completedBytes = task.completedBytes,
-                                totalBytes = task.totalBytes, failure = if (status == DownloadStatus.FAILED)
-                                    "Download failed (engine code ${task.errorCode ?: 0}). Retry to start a new transfer." else null)
+                                totalBytes = task.totalBytes, failure = null)
                             val terminal = status in setOf(DownloadStatus.STAGED, DownloadStatus.FAILED)
                             val now = System.nanoTime()
                             try {
@@ -220,7 +250,9 @@ class DownloadController internal constructor(
     }
 
     private fun TransferRecord.view(status: DownloadStatus = this.status) = DownloadState(fileName, status,
-        completedBytes, totalBytes, message = failure, publishedUri = publishedUri)
+        completedBytes, totalBytes, message = failure, publishedUri = publishedUri,
+        retryCount = retryCount, retryAt = retryAt, failureCategory = failureCategory,
+        engineCode = engineCode, stopReason = stopReason)
 
     private fun publish() {
         mutableTasks.value = records.values.sortedByDescending { it.createdAt }.map { record ->
@@ -289,7 +321,7 @@ class DownloadController internal constructor(
         val current = records.getValue(id)
         if (expectedToken != null && current.token != expectedToken) return@afterReady
         if (!views.getValue(id).canCancel) return@afterReady
-        save(current.copy(desired = DesiredState.CANCELED, status = DownloadStatus.CANCELED, failure = null))
+        save(current.copy(desired = DesiredState.CANCELED, status = DownloadStatus.CANCELED, retryAt = 0, failure = null))
         if (active.remove(id)) try { registered[id]?.let { engine.remove(it) } }
         catch (error: Exception) { lease?.let { interrupt(it, "Unable to cancel safely. Resume the remaining queue.") }; throw error }
         lease?.let { drain(it); finishIfIdle(it) }
@@ -366,7 +398,7 @@ class DownloadController internal constructor(
         if (lease !== execution) return
         for (current in eligible(execution)) {
             if (active.size >= batchConcurrency || lease !== execution) break
-            if (current.id in active) continue
+            if (current.id in active || current.retryAt > nowMillis()) continue
             val existing = registered[current.id]
             if (existing == null) {
                 registered[current.id] = engine.add(EngineRequest(current.url, current.fileName,
@@ -377,17 +409,49 @@ class DownloadController internal constructor(
                 val snapshot = engine.snapshots.value.tasks.find { it.id == existing }
                 if (snapshot?.state in setOf(EngineTaskState.COMPLETED, EngineTaskState.FAILED)) {
                     val completed = snapshot!!.state == EngineTaskState.COMPLETED
-                    val next = current.copy(status = if (completed) DownloadStatus.STAGED else DownloadStatus.FAILED,
-                        completedBytes = snapshot.completedBytes, totalBytes = snapshot.totalBytes,
-                        failure = if (completed) null else "Download failed. Retry to start a new transfer.")
-                    save(next)
-                    if (completed) launchExport(current.id, execution)
-                    continue
-                }
-                engine.resume(existing)
+                    if (!completed && current.retryAt > 0) {
+                        engine.restart(existing)
+                    } else {
+                        val next = current.copy(completedBytes = snapshot.completedBytes, totalBytes = snapshot.totalBytes)
+                        save(if (completed) next.copy(status = DownloadStatus.STAGED, failure = null)
+                            else failed(next, snapshot.errorCode))
+                        if (completed) launchExport(current.id, execution)
+                        continue
+                    }
+                } else engine.resume(existing)
             }
+            if (current.retryAt > 0) save(current.copy(status = DownloadStatus.SCHEDULED, retryAt = 0,
+                failure = null))
             active.add(current.id)
             if (lease !== execution) { stopEngine(); break }
+        }
+        armRetry(execution)
+    }
+
+    private fun failed(current: TransferRecord, code: Int?): TransferRecord {
+        val category = failureCategory(code)
+        val retry = code in setOf(2, 5, 6, 19, 29) && current.retryCount < 3
+        val attempt = current.retryCount + if (retry) 1 else 0
+        val delay = if (retry) listOf(5_000L, 15_000L, 45_000L)[attempt - 1] else 0
+        return current.copy(status = if (retry) DownloadStatus.WAITING else DownloadStatus.FAILED,
+            retryCount = attempt, retryAt = if (retry) nowMillis() + delay else 0,
+            failureCategory = category, engineCode = code,
+            failure = if (retry) "Temporary transfer failure. Automatic retry $attempt/3 in ${delay / 1000} seconds."
+                else failureAdvice(code) + if (current.retryCount >= 3) " Automatic retries exhausted." else "")
+    }
+
+    private fun armRetry(execution: ExecutionLease) {
+        retryWake?.cancel()
+        val next = eligible(execution).filter { it.retryAt > nowMillis() }.minOfOrNull { it.retryAt } ?: return
+        retryWake = scope.launch {
+            delay((next - nowMillis()).coerceAtLeast(1))
+            mutex.withLock {
+                if (lease !== execution) return@withLock
+                retryWake = null
+                try { drain(execution); finishIfIdle(execution); publish() }
+                catch (canceled: CancellationException) { throw canceled }
+                catch (_: Exception) { interrupt(execution, "Unable to retry safely. Resume to continue.") }
+            }
         }
     }
 
@@ -406,6 +470,8 @@ class DownloadController internal constructor(
                 try {
                     stopEngine()
                     if (lease !== execution) return@withLock
+                    boundExecution = execution
+                    execution.prepareNetwork()
                     engine.configureConcurrency(batchConcurrency)
                     engine.start()
                     drain(execution)
@@ -416,28 +482,47 @@ class DownloadController internal constructor(
         }
     }
 
-    internal fun revoke(execution: ExecutionLease): Boolean {
+    internal fun revoke(execution: ExecutionLease, reason: Int? = null, reschedule: Boolean = true): Boolean {
         if (lease !== execution) return false
         lease = null
+        if (!reschedule) authorizationToken = ""
         scope.launch {
             ready.await()
             mutex.withLock {
                 if (lease == null) {
                     stopEngine()
                     records.values.filter { it.token == execution.token && it.desired == DesiredState.RUNNING && views.getValue(it.id).status in runnable }
-                        .forEach { views[it.id] = it.view(DownloadStatus.WAITING).copy(message = "Waiting for Android to allow the transfer.") }
+                        .forEach {
+                            val next = it.copy(status = if (reschedule) DownloadStatus.WAITING else DownloadStatus.PAUSED,
+                                desired = if (reschedule) it.desired else DesiredState.PAUSED,
+                                token = if (reschedule) it.token else "", stopReason = reason,
+                                failure = if (!reschedule) "Stopped by the user. Resume to continue."
+                                else interruptionAdvice(reason, it.batchWifiOnly))
+                            try { save(next) }
+                            catch (canceled: CancellationException) { throw canceled }
+                            catch (_: Exception) {
+                                // Work has already stopped; never crash the service on a failed stop write.
+                                authorizationToken = ""
+                                records[it.id] = next.copy(token = "", desired = DesiredState.PAUSED,
+                                    status = DownloadStatus.PAUSED)
+                                views[it.id] = records.getValue(it.id).view().copy(
+                                    message = "Unable to save the interruption state. Partial data is preserved; check storage and Resume.")
+                            }
+                        }
                     publish()
                 }
             }
         }
-        return !ready.isCompleted || records.values.any { it.token == execution.token && it.desired == DesiredState.RUNNING && it.status in runnable }
+        return reschedule && (!ready.isCompleted || records.values.any { it.token == execution.token && it.desired == DesiredState.RUNNING && it.status in runnable })
     }
 
     internal fun networkChanged(execution: ExecutionLease) {
         scope.launch {
             mutex.withLock {
-                if (lease !== execution || active.isEmpty()) return@withLock
-                try { engine.checkpoint() }
+                // Authorization reads the latest job network when startup completes. A callback
+                // arriving before that point must not checkpoint an unstarted engine.
+                if (lease !== execution || boundExecution !== execution) return@withLock
+                try { execution.prepareNetwork(); engine.checkpoint() }
                 catch (canceled: CancellationException) { throw canceled }
                 catch (_: Exception) { interrupt(execution, "Unable to reconnect. Resume to try again.") }
             }
@@ -515,10 +600,16 @@ class DownloadController internal constructor(
         return mutex.withLock { action() }
     }
     private suspend fun stopEngine() {
-        try { engine.stop() }
-        catch (canceled: CancellationException) { throw canceled }
-        catch (_: Exception) { engine.close() }
-        active.clear()
+        retryWake?.cancel(); retryWake = null
+        try {
+            try { engine.stop() }
+            catch (canceled: CancellationException) { throw canceled }
+            catch (_: Exception) { engine.close() }
+        } finally {
+            boundExecution?.releaseNetwork?.invoke()
+            boundExecution = null
+            active.clear()
+        }
     }
     private companion object {
         val runnable = setOf(DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING)

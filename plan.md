@@ -313,7 +313,19 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 4.5 (native interface overhaul) is the current implementation milestone.
+Milestone 5 (reliability hardening) is the current implementation milestone.
+The user authorized the full milestone with bounded automatic retries, explicit
+Resume after reboot/user stop, and previewable sanitized diagnostics reports.
+Temporary transfer errors receive three automatic retries after 5, 15 and 45 seconds,
+only under an active matching UIDT execution. Retry budgets and deadlines persist in
+Room; native restart retains staging identities and partial files. System constraints
+preserve user intent and do not consume retry attempts. Native traffic follows the
+job's assigned network; network changes refresh the session and DNS. Startup never
+schedules a new transfer. Notification denial retains in-app controls and does not
+prevent a user-started transfer. Diagnostics share only allowlisted structured fields
+through an explicit preview/share action. See PROGRESS.md for verification limits.
+
+Milestone 4.5 (native interface overhaul) is retained.
 The user authorized the interface refresh after milestone 4, with Material 3
 Expressive styling, dynamic colors and bounded autosaving settings controls.
 Settings save without a persistent success banner. New Add forms prefill HTTP/HTTPS
@@ -331,7 +343,7 @@ The multi-task UIDT coordinator retains Room intent/progress records, stable nat
 staging identities, process-death resume and restartable MediaStore export. Only
 successfully published files are called Completed. Legacy JSON records are preserved
 without guessing their missing engine mappings. Custom destinations, bulk actions,
-queue reordering and broader reliability policy remain later work.
+queue reordering remain later work.
 See README.md for behavior, verification commands and acceptance status.
 
 | Milestone                    | Deliverable                                         | Acceptance gate                                                                                      |

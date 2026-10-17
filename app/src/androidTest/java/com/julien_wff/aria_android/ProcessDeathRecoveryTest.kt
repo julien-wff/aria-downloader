@@ -78,9 +78,20 @@ class ProcessDeathRecoveryTest {
             restored.forEach { task ->
                 assertNotEquals(DownloadStatus.INTERRUPTED, task.state.status)
             }
-            // One visible Resume captures all previously running eligible batch members.
-            restored.firstOrNull { it.state.canResume }?.let { task ->
-                withContext(Dispatchers.Main) { controller.resumeTask(task.id) }
+            if (args.getString("expectUserStop") == "true") {
+                assertTrue("User stop must require explicit Resume", restored.all { it.state.status == DownloadStatus.PAUSED })
+                val before = restored.associate { it.id to it.state.completedBytes }
+                delay(1500)
+                assertTrue(controller.tasks.value.filter { it.id in before }.all {
+                    it.state.status == DownloadStatus.PAUSED && it.state.completedBytes == before[it.id]
+                })
+            }
+            // A user stop pauses each task. Explicitly resume each paused member; a normal
+            // process kill retains running intent, so the first action captures that batch.
+            restored.forEach { task ->
+                if (controller.tasks.value.first { it.id == task.id }.state.canResume) {
+                    withContext(Dispatchers.Main) { controller.resumeTask(task.id) }
+                }
             }
             val complete = withTimeout(120_000) {
                 controller.tasks.first { tasks -> tasks.filter { it.state.fileName in names }.all {

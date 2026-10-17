@@ -17,6 +17,8 @@ progress and quick controls.
 
 - Manage concurrent downloads in a persistent queue, with pause, resume, cancel and retry actions.
 - Continue user-started transfers in the background and recover interrupted work.
+- Automatically retry temporary connection/server failures up to three times, preserving partial files.
+- Preview and share a sanitized diagnostics report from download details.
 - Review completed, failed and canceled transfers in History; open or share files after they have
   been saved.
 - Share a link into the app for review before starting a transfer.
@@ -26,6 +28,23 @@ progress and quick controls.
 Aria is an Android app with the download engine embedded in the application. It does not require a
 companion server or a first-launch binary download. The current interface accepts individual HTTP
 and HTTPS links.
+
+## Recovery and diagnostics
+
+Temporary timeout, connection, DNS and server-busy failures retry after 5, 15 and 45 seconds.
+Waiting retries release their queue slot. Retries require an active Android transfer job; losing
+network access waits for Android to permit execution again. The unmetered Wi-Fi preference applies
+to the entire authorized queue. Server access, TLS, storage, verification and rejected-resume
+failures require user action; partial data is preserved. Manual Retry creates a fresh transfer.
+
+After reboot or an explicit Android user stop, open Aria and choose Resume. Reopening the app alone
+does not schedule downloads. Other system interruptions can resume when Android retries the existing
+job. When no reliable stop reason exists, Aria describes the interruption without guessing its cause.
+
+Transfers still work with notifications disabled. In-app controls remain available, with a shortcut
+to notification settings. Download details expose retry counts, engine errors and known Android stop
+reasons. Preview diagnostics before choosing Share: reports contain app/API versions and structured
+transfer status, excluding URLs, filenames, headers, credentials, tokens, paths and raw exceptions.
 
 ## Project structure
 
@@ -66,5 +85,6 @@ Device tests require a connected Android 15 or newer device or emulator:
 ./gradlew connectedDebugAndroidTest
 ```
 
+Recovery scenarios and the device acceptance matrix are in [docs/reliability.md](docs/reliability.md).
 The project roadmap and milestone status are in [plan.md](plan.md) and
 [PROGRESS.md](PROGRESS.md).

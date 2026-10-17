@@ -11,6 +11,8 @@ interface DownloadEngine {
     suspend fun add(request: EngineRequest): EngineTaskId
     suspend fun pause(id: EngineTaskId)
     suspend fun resume(id: EngineTaskId)
+    /** Retry a failed task using its existing staging directory and request. */
+    suspend fun restart(id: EngineTaskId) { error("Restart is unavailable") }
     suspend fun remove(id: EngineTaskId)
     suspend fun updateOptions(id: EngineTaskId, options: EngineOptions)
     suspend fun checkpoint()

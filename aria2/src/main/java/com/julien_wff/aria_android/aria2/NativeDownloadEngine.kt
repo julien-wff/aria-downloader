@@ -159,6 +159,20 @@ class NativeDownloadEngine internal constructor(
         }
     }
 
+    override suspend fun restart(id: EngineTaskId): Unit = execute {
+        requireStarted()
+        val task = task(id)
+        check(task.snapshot.state == EngineTaskState.FAILED) { "Task has not failed" }
+        // Finalize before changing the state, so the failed GID can be registered again.
+        finishSession()
+        task.snapshot = task.snapshot.copy(state = EngineTaskState.QUEUED,
+            bytesPerSecond = 0, errorCode = null, errorMessage = null)
+        try { ensureSession() } catch (error: Exception) {
+            task.snapshot = task.snapshot.copy(state = EngineTaskState.FAILED)
+            throw error
+        }
+    }
+
     override suspend fun remove(id: EngineTaskId): Unit = execute {
         requireStarted()
         val task = task(id)
@@ -237,6 +251,7 @@ class NativeDownloadEngine internal constructor(
             "follow-torrent", "false", "follow-metalink", "false", "enable-dht", "false",
             "enable-dht6", "false", "enable-peer-exchange", "false", "seed-time", "0",
             "enable-mmap", "false", "max-download-result", "1000",
+            "max-tries", "1", "retry-wait", "0",
         ) + if (config.dnsServers.isEmpty()) emptyArray() else arrayOf(
             "async-dns-server", config.dnsServers.joinToString(","),
         )

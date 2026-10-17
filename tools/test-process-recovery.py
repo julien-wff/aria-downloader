@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--serial", help="ADB device serial (required when several devices are attached)")
+    parser.add_argument("--stop-mode", choices=("sigkill", "force-stop", "task-manager"), default="sigkill",
+                        help="How to interrupt Aria only; user stops must require explicit Resume")
     options = parser.parse_args()
     adb = [options.adb] + (["-s", options.serial] if options.serial else [])
     package = "com.julien_wff.aria_android"
@@ -55,7 +57,10 @@ def main():
                 pass
 
     def run(*arguments):
-        return subprocess.run(adb + list(arguments), check=True, text=True, capture_output=True).stdout
+        result = subprocess.run(adb + list(arguments), text=True, capture_output=True)
+        if result.returncode:
+            raise RuntimeError(f"ADB {arguments[0]} failed ({result.returncode}): {result.stdout}{result.stderr}")
+        return result.stdout
 
     root = Path(__file__).resolve().parents[1]
     for apk in ("app/build/outputs/apk/debug/app-debug.apk",
@@ -72,7 +77,8 @@ def main():
         def instrument(phase, method):
             return ["shell", "am", "instrument", "-w", "-e", "class", f"{test_class}#{method}",
                     "-e", "recoveryPhase", phase, "-e", "recoveryUrl", f"http://127.0.0.1:{port}/file",
-                    "-e", "recoveryName", name, "-e", "recoveryHash", hashlib.sha256(payload).hexdigest(),
+                    "-e", "recoveryName", name, "-e", "expectUserStop", str(options.stop_mode != "sigkill").lower(),
+                    "-e", "recoveryHash", hashlib.sha256(payload).hexdigest(),
                     f"{package}.test/androidx.test.runner.AndroidJUnitRunner"]
 
         seed = subprocess.Popen(adb + instrument("seed", "seedRunningTransfer"),
@@ -91,8 +97,13 @@ def main():
             pids = run("shell", "pidof", package).strip().split()
             if len(pids) != 1:
                 raise RuntimeError(f"Expected one live target process, got {pids}")
-            run("shell", "run-as", package, "kill", "-9", pids[0])
-            print("Killed live transfer process after its checkpoint.", flush=True)
+            if options.stop_mode == "force-stop":
+                run("shell", "am", "force-stop", package)
+            elif options.stop_mode == "task-manager":
+                run("shell", "cmd", "activity", "stop-app", package)
+            else:
+                run("shell", "run-as", package, "kill", "-9", pids[0])
+            print(f"Interrupted live transfers after checkpoints: {options.stop_mode}.", flush=True)
             output, _ = seed.communicate(timeout=20)
             print(output, flush=True)  # The killed seed runner is expected to report process death.
         finally:
@@ -106,7 +117,7 @@ def main():
             raise RuntimeError("Recovery instrumentation did not pass")
         if not all(any(task == expected and offset > 0 for task, offset in ranges) for expected in ("0", "1")):
             raise RuntimeError("Recovery did not issue non-zero range requests for both tasks")
-        print("PASS: two transfers recovered after abrupt process death; both public SHA-256 hashes matched; range resume verified.")
+        print(f"PASS: two transfers recovered after {options.stop_mode}; both public SHA-256 hashes matched; range resume verified.")
     finally:
         run("reverse", "--remove", f"tcp:{port}")
         server.shutdown()

@@ -17,10 +17,13 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 4.5 is current: Material 3 Expressive interface overhaul, original vector
-launcher icon, accessible interface icons, autosaving settings and keyboard-aware
-navigation/forms. Retain the milestone 4 queue, task details, history and share-sheet
-intake. The user explicitly authorized advancing after milestone 3 verification. Retain Room recovery, native checkpoints and restartable
-public Downloads export. Remaining earlier acceptance gates do not block advancement;
-build, lint and relevant tests still apply. Completion means successful MediaStore
-publication. Staged or export-failed files must never be presented as publicly saved.
+Milestone 5 is current: reliability hardening, bounded automatic retries, network
+constraints, interruption recovery and previewable sanitized diagnostics. The user
+explicitly authorized implementing the milestone 5 plan. Retain milestone 4.5's
+Material 3 Expressive UI, original vector launcher icon, accessible controls,
+autosaving settings and keyboard-aware navigation/forms, along with the queue,
+task details, history, share-sheet intake and per-download HTTP options.
+Retain Room recovery, native checkpoints and restartable public Downloads export.
+Remaining earlier acceptance gates do not block advancement; build, lint and relevant
+tests still apply. Completion means successful MediaStore publication. Staged or
+export-failed files must never be presented as publicly saved.

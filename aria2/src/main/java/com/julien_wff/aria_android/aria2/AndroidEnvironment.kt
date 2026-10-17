@@ -31,7 +31,7 @@ internal class AndroidEnvironment(context: Context, private val root: File) {
         }
         check(temporary.renameTo(caFile)) { "Cannot replace trust bundle" }
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val dns = connectivity.getLinkProperties(connectivity.activeNetwork)?.dnsServers
+        val dns = connectivity.getLinkProperties(connectivity.boundNetworkForProcess ?: connectivity.activeNetwork)?.dnsServers
             .orEmpty().mapNotNull { it.hostAddress }
         return SessionEnvironment(caFile, dns)
     }

@@ -1,5 +1,11 @@
 package com.julien_wff.aria_android
 
+import android.app.NotificationManager
+import android.content.Intent
+import android.provider.Settings
+import android.os.Build
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
@@ -63,7 +69,10 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     var referrer by rememberSaveable { mutableStateOf("") }
     var userAgent by rememberSaveable { mutableStateOf("") }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
-    var denied by rememberSaveable { mutableStateOf(false) }
+    var denied by remember { mutableStateOf(!context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        denied = !context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+    }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
     var deletePublic by rememberSaveable { mutableStateOf(false) }
     var cancelId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -170,7 +179,14 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                             onClick = { navigate(label) }, icon = { AriaIcon(icon) }, label = { Text(label) }) }
                     }
                     Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (denied) Notice(R.drawable.ic_notifications_off, "Notifications are disabled. Download controls remain available here.")
+                        if (denied && !adding) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f)) { Notice(R.drawable.ic_notifications_off,
+                                "Notifications are disabled. Download controls remain available here.") }
+                            TextButton(onClick = {
+                                context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                            }) { Text("Settings") }
+                        }
                         when {
                             adding -> AddDownload(url, { url = it; model.clearError() }, name, { name = it; model.clearError() }, busy,
                                 error = error,
@@ -373,6 +389,21 @@ private fun TaskList(destination: String, tasks: List<DownloadTask>, selected: S
 
 @Composable
 private fun TaskDetails(task: DownloadTask, actions: @Composable (DownloadTask) -> Unit) {
+    val context = LocalContext.current
+    var report by rememberSaveable(task.id) { mutableStateOf<String?>(null) }
+    report?.let { text ->
+        AlertDialog(onDismissRequest = { report = null }, title = { Text("Diagnostics preview") },
+            text = { SelectionContainer(Modifier.verticalScroll(rememberScrollState())) { Text(text) } },
+            confirmButton = { TextButton(onClick = {
+                try {
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                    }, "Share diagnostics"))
+                } catch (_: android.content.ActivityNotFoundException) { report = null }
+            }) { Text("Share") } },
+            dismissButton = { TextButton(onClick = { report = null }) { Text("Close") } })
+    }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(task.state.fileName, style = MaterialTheme.typography.headlineMedium)
         Section("Transfer", R.drawable.ic_download) { TaskProgress(task.state); actions(task) }
@@ -380,6 +411,15 @@ private fun TaskDetails(task: DownloadTask, actions: @Composable (DownloadTask) 
         Section("Configuration", R.drawable.ic_tune) {
             Text("${task.connections} connections per server")
             Text(if (task.speedLimit == 0L) "No speed limit" else "${Formatter.formatShortFileSize(LocalContext.current, task.speedLimit)}/s limit")
+        }
+        Section("Diagnostics", R.drawable.ic_description) {
+            Text("Automatic retries: ${task.state.retryCount}/3")
+            task.state.engineCode?.let { Text("Engine code: $it") }
+            task.state.stopReason?.let { Text("Android stop reason: $it") }
+            TextButton(onClick = {
+                val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+                report = transferDiagnostics(task.state, version, Build.VERSION.SDK_INT)
+            }) { Text("Preview diagnostics") }
         }
         if (task.state.status == DownloadStatus.COMPLETED) Notice(R.drawable.ic_folder, "Saved to Downloads")
     }

@@ -17,6 +17,7 @@ import java.net.Socket
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -131,11 +132,59 @@ class BackgroundDownloadTest {
         }
     }
 
+    @Test fun automaticRetryPublishesResumedFileWhenNotificationsAreDenied() = runBlocking {
+        val permission = android.Manifest.permission.POST_NOTIFICATIONS
+        val granted = context.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        shell("pm revoke ${context.packageName} $permission")
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use {
+                ControlledServer().use { server ->
+                    val name = "retry-${System.nanoTime()}.bin"
+                    try {
+                        withContext(Dispatchers.Main) {
+                            controller.cancel()
+                            controller.enqueue(server.url, name,
+                                com.julien_wff.aria_android.downloads.DownloadSettings(connections = 1))
+                        }
+                        await { it.status == DownloadStatus.DOWNLOADING && it.completedBytes > 128 * 1024 }
+                        withContext(Dispatchers.Main) { controller.pause() }
+                        val directory = File(context.noBackupFilesDir, "aria2").listFiles()!!.single { File(it, name).exists() }
+                        assertTrue(File(directory, "$name.aria2").exists())
+                        server.failNext.set(true)
+                        withContext(Dispatchers.Main) { controller.resume() }
+                        await { it.status == DownloadStatus.WAITING && it.retryCount == 1 }
+                        assertTrue(File(directory, name).exists())
+                        assertEquals(29, controller.state.value.engineCode)
+                        await { it.status == DownloadStatus.COMPLETED }
+                        assertEquals(1, controller.state.value.retryCount)
+                        assertTrue(server.rangeRequests.get() > 0)
+                        val uri = android.net.Uri.parse(requireNotNull(controller.state.value.publishedUri))
+                        try {
+                            val hash = requireNotNull(context.contentResolver.openInputStream(uri)).use { input ->
+                                val digest = MessageDigest.getInstance("SHA-256")
+                                val buffer = ByteArray(65536)
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    digest.update(buffer, 0, count)
+                                }
+                                digest.digest()
+                            }
+                            assertArrayEquals(server.hash(), hash)
+                            assertFalse(File(directory, name).exists())
+                        } finally { context.contentResolver.delete(uri, null, null) }
+                    } finally { withContext(Dispatchers.Main) { controller.cancel() } }
+                }
+            }
+        } finally { if (granted) shell("pm grant ${context.packageName} $permission") }
+    }
+
     internal class ControlledServer : Closeable {
         private val bytes = ByteArray(8 * 1024 * 1024) { (it % 251).toByte() }
         private val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val executor = Executors.newCachedThreadPool()
         val rangeRequests = AtomicLong()
+        val failNext = AtomicBoolean(false)
         val url = "http://127.0.0.1:${socket.localPort}/file"
         init {
             executor.submit {
@@ -165,6 +214,10 @@ class BackgroundDownloadTest {
                         }
                     }
                     val output = client.getOutputStream()
+                    if (failNext.compareAndSet(true, false)) {
+                        output.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                        return
+                    }
                     val header = buildString {
                         append(if (range) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
                         append("Content-Length: ${end - start + 1}\r\nAccept-Ranges: bytes\r\n")
