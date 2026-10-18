@@ -126,7 +126,7 @@ internal class DownloadExporter(
         next = next.copy(status = DownloadStatus.COMPLETED,
             publishedUri = next.files.first { it.selected }.publishedUri, failure = null)
         persist(next)
-        cleanup(next)
+        runCatching { cleanup(next) }
         return next
     }
 
@@ -173,7 +173,7 @@ internal class DownloadExporter(
             if (!authorized()) throw IOException("Saving interrupted; retry saving to continue")
             destination.publish(uri, record)
         }
-        next = next.copy(status = DownloadStatus.COMPLETED)
+        next = next.copy(status = DownloadStatus.COMPLETED, failure = null)
         persist(next) // Never remove staging until publication and its durable record succeed.
         if (cleanupAfter) runCatching { cleanup(next) }
         next

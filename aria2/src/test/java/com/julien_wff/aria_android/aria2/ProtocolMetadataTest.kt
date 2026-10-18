@@ -5,6 +5,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProtocolMetadataTest {
+    @Test fun rejectsNonAdjacentAncestorPathsAndCheckpointDirectories() {
+        for (paths in listOf(listOf("a", "a-keep", "a/b"), listOf("a", "a.aria2/b"))) {
+            val entries = paths.joinToString("") { path ->
+                """<file name="$path"><url>https://example.org/file</url></file>"""
+            }
+            withMetadata("<metalink>$entries</metalink>") {
+                assertThrows(IllegalArgumentException::class.java) { ProtocolMetadata.metalink(it) }
+            }
+        }
+    }
+    @Test fun pieceHashesCannotBeUsedAsWholeFileChecksums() {
+        val pieceHash = "ab".repeat(32)
+        val wholeHash = "cd".repeat(32)
+        val pieces = """<pieces length="1024" type="sha-256"><hash type="sha-256">$pieceHash</hash></pieces>"""
+        withMetadata("""<metalink><file name="a">$pieces<url>https://example.org/a</url></file></metalink>""") {
+            assertThrows(IllegalArgumentException::class.java) { ProtocolMetadata.metalink(it) }
+        }
+        withMetadata("""<metalink><file name="a">$pieces<hash type="sha-256">$wholeHash</hash><url>https://example.org/a</url></file></metalink>""") {
+            assertEquals("sha-256=$wholeHash", ProtocolMetadata.metalink(it).single().checksum)
+        }
+    }
     @Test fun rejectsTraversalReservedNamesAndConflictingPaths() {
         for (path in listOf("../a", "/a", "a/../b", "a//b", "C:/file", "a\\b", ".source.torrent", "a/./b", "a\u0000b")) {
             assertThrows(IllegalArgumentException::class.java) { ProtocolMetadata.safePath(path) }

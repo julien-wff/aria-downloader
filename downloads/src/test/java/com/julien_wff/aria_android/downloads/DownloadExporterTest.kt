@@ -114,6 +114,51 @@ class DownloadExporterTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun multiFileCleanupFailureDoesNotUndoDurablePublication() = runBlocking {
+        val root = Files.createTempDirectory("multi-export").toFile()
+        try {
+            var saved = TransferRecord("lease", "https://example.org/source.torrent", "Torrent",
+                DesiredState.RUNNING, DownloadStatus.STAGED, taskId = "0123456789abcdef",
+                completedBytes = 3, totalBytes = 3, protocol = DownloadProtocol.TORRENT,
+                selectionConfirmed = true, files = listOf(DownloadFile(1, "a.bin", 3, 3)))
+            val source = File(root, "${saved.taskId}/a.bin").apply {
+                parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3))
+            }
+            var published = false
+            var durableCompletion = false
+            val destination = object : ExportDestination {
+                override fun find(record: TransferRecord): String? = null
+                override fun create(record: TransferRecord) = "content://downloads/1"
+                override fun isPublished(uri: String): Boolean? {
+                    if (durableCompletion) throw IOException("MediaStore temporarily unavailable during cleanup")
+                    return published
+                }
+                override fun output(uri: String): OutputStream = ByteArrayOutputStream()
+                override fun publish(uri: String) { published = true }
+            }
+            val result = DownloadExporter(root, destination).export(saved, {
+                saved = it
+                durableCompletion = it.status == DownloadStatus.COMPLETED
+            }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, result.status)
+            assertEquals(DownloadStatus.COMPLETED, saved.status)
+            assertTrue(saved.files.single().published)
+            assertTrue(source.exists()) // Startup can retry this best-effort cleanup later.
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun successfulSaveRetryClearsPreviousFailure() = runBlocking {
+        val root = Files.createTempDirectory("export-test").toFile()
+        try {
+            val (record, _) = staged(root)
+            var saved = record.copy(status = DownloadStatus.SAVE_FAILED, failure = "Unable to save to Downloads")
+            val result = DownloadExporter(root, Destination()).export(saved, { saved = it }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, result.status)
+            assertNull(result.failure)
+            assertNull(saved.failure)
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun destinationInsertionBeforeDatabaseFailureIsDiscoveredOnRetry() = runBlocking {
         val root = Files.createTempDirectory("export-test").toFile()
         try {

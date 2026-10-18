@@ -14,6 +14,7 @@ and rename. Files are limited to 8 MiB and 10,000 entries, with a conservative a
 file-journal budget of 1 MB before Base64 encoding to keep Room rows readable through Android cursor
 windows. Long relative paths reduce the effective file-count limit. Unsafe or conflicting paths,
 symlinks, XML entities and unsupported torrent formats are rejected before payload execution.
+Path conflicts include parent directories and the engine's `.aria2` checkpoint paths.
 
 Metadata completion enters durable **Ready to select files**, releases its queue slot and stops its
 network work. Select at least one supported file and choose **Start selected files**. That action
@@ -29,6 +30,7 @@ stops post-download seeding. Metalink children run sequentially inside their par
 deterministic native identities, safe paths, HTTP/HTTPS mirror failover and supported whole-file
 SHA-1/SHA-256/SHA-512 checksums. Unsupported-only entries cannot be selected. Torrent-backed
 Metalink entries and piece-checksum-only manifests are not supported.
+Piece checksums are never used as whole-file checksums, including when both appear in a manifest.
 
 ## Publication and recovery
 
@@ -44,6 +46,8 @@ already public file. A task becomes Completed only when every selected file is p
 durable. Staging is retained until that point. Open individual files in details; Share grants read
 access to all selected public files. Deletion covers every associated entry, retaining the task if
 any deletion or consent fails.
+Staging cleanup after durable completion is best effort; a cleanup failure preserves Completed and
+can be retried at startup.
 
 ## Verification
 

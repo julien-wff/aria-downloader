@@ -107,15 +107,17 @@ internal object ProtocolMetadata {
                 url.takeIf { declaredType in setOf("", "http", "https") && uri?.scheme?.lowercase() in setOf("http", "https") && !uri?.host.isNullOrEmpty() &&
                     uri?.rawUserInfo == null && url.none(Char::isISOControl) }
             }.distinct() }
-            val hashes = children("hash")
-            val checksum = (0 until hashes.length).firstNotNullOfOrNull { n ->
-                val hash = hashes.item(n) as Element
+            // Piece hashes describe individual chunks, never the whole payload.
+            val hashes = children("hash").let { list -> (0 until list.length).map { list.item(it) as Element }
+                .filter { hash -> hash.parentNode == element ||
+                    (hash.parentNode as? Element)?.let { parent -> parent.localName == "verification" && parent.parentNode == element } == true } }
+            val checksum = hashes.firstNotNullOfOrNull { hash ->
                 val type = hash.getAttribute("type").lowercase().replace("sha256", "sha-256").replace("sha512", "sha-512")
                 val length = mapOf("sha-1" to 40, "sha-256" to 64, "sha-512" to 128)[type]
                 val value = hash.textContent.trim().lowercase()
                 if (length != null && value.length == length && value.all { it in "0123456789abcdef" }) "$type=$value" else null
             }
-            require(hashes.length == 0 || checksum != null) { "Metalink has no supported valid file checksum." }
+            require((hashes.isEmpty() && children("pieces").length == 0) || checksum != null) { "Metalink has no supported valid file checksum." }
             val size = children("size").item(0)?.textContent?.trim()?.toLong() ?: 0L
             EngineFile(index + 1, safePath(element.getAttribute("name")), size, mirrors = urls, checksum = checksum,
                 supported = urls.isNotEmpty())
@@ -134,8 +136,10 @@ internal object ProtocolMetadata {
         require(paths.distinct().size == paths.size) { "Metadata contains duplicate file paths." }
         val pathSet = paths.toSet()
         require(paths.none { "$it.aria2" in pathSet }) { "Metadata paths conflict with native checkpoint files." }
-        val sorted = paths.sorted()
-        require(sorted.zipWithNext().none { (a, b) -> b.startsWith("$a/") }) { "Metadata contains conflicting file paths." }
+        val occupiedFiles = pathSet + paths.map { "$it.aria2" }
+        require(paths.none { path ->
+            path.indices.any { index -> path[index] == '/' && path.substring(0, index) in occupiedFiles }
+        }) { "Metadata contains conflicting file paths." }
         files.fold(0L) { sum, file -> Math.addExact(sum, file.length) }
     }
 }
