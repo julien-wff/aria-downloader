@@ -10,6 +10,7 @@ android {
     defaultConfig {
         minSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["notAnnotation"] = "com.julien_wff.aria_android.aria2.HttpBenchmark"
         consumerProguardFiles("consumer-rules.pro")
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
@@ -33,6 +34,7 @@ android {
 val nativeDependencies = tasks.register<Exec>("nativeDependencies") {
     description = "Build checksum-verified libaria2 and dependencies for both Android ABIs"
     val sdk = androidComponents.sdkComponents.sdkDirectory.get().asFile
+    inputs.dir("native/patches")
     inputs.files("native/build.py", "native/sources.json", "../gradle/libs.versions.toml")
     outputs.dir(layout.buildDirectory.dir("native/install"))
     commandLine("python3", "native/build.py", "--sdk", sdk.absolutePath)

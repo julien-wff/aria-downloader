@@ -45,7 +45,7 @@ class DownloadFiles(private val context: Context, private val controller: Downlo
         check(record.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED))
         val consent = withContext(Dispatchers.IO) {
             val destination = DownloadsDestination(context)
-            val uris = if (record.files.isEmpty()) listOfNotNull(record.publishedUri ?: destination.find(record)) else
+            val uris = if (record.files.isEmpty()) listOfNotNull(record.publishedUri ?: record.pendingUri ?: destination.find(record)) else
                 record.files.filter { it.selected }.mapNotNull { file -> file.publishedUri ?: destination.find(record.copy(
                     id = "${record.id}-file-${file.index}", fileName = file.path)) }
             for (uri in uris.distinct()) {
@@ -59,6 +59,7 @@ class DownloadFiles(private val context: Context, private val controller: Downlo
                     if (destination.isPublished(uri) != null) throw IOException("Unable to delete the Downloads file. Entry kept.")
                 }
             }
+            destination.cleanupLegacyFolders()
             record.taskId?.let { taskId ->
                 require(taskId.matches(Regex("[0-9a-f]{16}")))
                 val root = File(context.noBackupFilesDir, "aria2")

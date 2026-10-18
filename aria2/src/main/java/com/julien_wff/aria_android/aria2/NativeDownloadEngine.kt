@@ -135,7 +135,11 @@ class NativeDownloadEngine internal constructor(
         val task = Task(id, request, directory)
         ensureSession()
         try { addNative(task) } catch (error: Exception) {
-            if (request.kind == EngineSourceKind.HTTP) throw error
+            if (request.kind == EngineSourceKind.HTTP) {
+                // Drop a possibly registered descriptor, then restore unrelated transfers.
+                restartSession()
+                throw error
+            }
             runCatching { native.remove(task.nativeId) }
             task.snapshot = EngineTaskSnapshot(id, EngineTaskState.FAILED,
                 errorMessage = "Metadata is invalid, unsafe, too large or unsupported. Check the source and choose supported files.")
@@ -289,7 +293,14 @@ class NativeDownloadEngine internal constructor(
         opened = true
         try {
             tasks.values.filter { it.snapshot.state in runnableStates + EngineTaskState.PAUSED }
-                .forEach { addNative(it) }
+                .forEach { task ->
+                    try { addNative(task) }
+                    catch (error: Exception) {
+                        if (task.request.httpOutput == null) throw error
+                        task.snapshot = task.snapshot.copy(state = EngineTaskState.FAILED, bytesPerSecond = 0,
+                            errorCode = null, errorMessage = "Unable to reopen the Downloads file. Partial data is preserved.")
+                    }
+                }
         } catch (error: Exception) {
             finishSession()
             throw error
@@ -311,9 +322,26 @@ class NativeDownloadEngine internal constructor(
         task.nativeId = task.id.value
         task.preparing = false
         if (request.kind == EngineSourceKind.HTTP) {
-            check(File(task.directory, request.fileName).canonicalFile.parentFile == task.directory.canonicalFile)
+            val name = if (request.httpOutput == null) request.fileName else "payload"
+            val payload = File(task.directory, name).canonicalFile
+            check(payload.parentFile == task.directory.canonicalFile)
+            request.httpOutput?.open()?.use { output ->
+                val completed = File(task.directory, ".http-complete")
+                if (completed.isFile) {
+                    val size = completed.readText().toLong()
+                    check(size >= 0 && output.statSize == size) { "Completed HTTP destination changed" }
+                    task.snapshot = EngineTaskSnapshot(task.id, EngineTaskState.COMPLETED, size, size)
+                    return
+                }
+                check(output.statSize >= 0 && (output.statSize == 0L || File(task.directory, "payload.aria2").isFile)) {
+                    "HTTP resume checkpoint is unavailable; partial data is preserved"
+                }
+                native.bindOutput(payload.path, output.fd)
+            }
             native.add(task.nativeId, java.net.URI(request.url).toASCIIString(), commonOptions(task) + arrayOf(
-                "out", request.fileName, "content-disposition-default-utf8", "true", "use-head", "false"))
+                "out", name, "content-disposition-default-utf8", "true", "use-head", "false",
+                "min-split-size", "4M") +
+                if (request.httpOutput == null) emptyArray() else arrayOf("force-save", "true"))
             return
         }
         val source = metadata(task)
@@ -435,6 +463,25 @@ class NativeDownloadEngine internal constructor(
                         return@forEach
                     }
                 } else if (task.request.kind != EngineSourceKind.HTTP) task.files = validateNativeFiles(task)
+                if (nativeState == EngineTaskState.FAILED && task.request.httpOutput != null) {
+                    // Failed groups have also closed their writers. Do not retain a deleted
+                    // partial file through this descriptor while other transfers continue.
+                    runCatching { native.flushOutput(File(task.directory, "payload").canonicalPath) }
+                }
+                if (nativeState == EngineTaskState.COMPLETED && task.request.httpOutput != null) {
+                    // libaria2 has closed its writers and drained its disk cache at this point.
+                    native.flushOutput(File(task.directory, "payload").canonicalPath)
+                    val temporary = File(task.directory, ".http-complete.tmp")
+                    java.io.FileOutputStream(temporary).use {
+                        it.write(data[1].toString().toByteArray(Charsets.US_ASCII))
+                        it.fd.sync()
+                    }
+                    check(temporary.renameTo(File(task.directory, ".http-complete")))
+                    // Persist both the marker rename and its task directory before emitting
+                    // completion; Room may commit the publication intent immediately afterward.
+                    syncDirectory(task.directory)
+                    syncDirectory(root)
+                }
                 if (nativeState == EngineTaskState.COMPLETED) task.files = task.files.map {
                     if (it.selected) it.copy(completedBytes = it.length) else it
                 }
@@ -454,9 +501,16 @@ class NativeDownloadEngine internal constructor(
             } catch (_: Exception) {
                 runCatching { native.remove(task.nativeId) }
                 task.snapshot = EngineTaskSnapshot(task.id, EngineTaskState.FAILED,
-                    errorMessage = "Metadata is invalid, unsafe, too large or unsupported. Check the source and choose supported files.", files = task.files)
+                    errorMessage = if (task.request.httpOutput != null) "Unable to finish the Downloads file. Partial data is preserved."
+                        else "Metadata is invalid, unsafe, too large or unsupported. Check the source and choose supported files.", files = task.files)
             }
         }
+    }
+
+    private fun syncDirectory(directory: File) {
+        val descriptor = android.system.Os.open(directory.path,
+            android.system.OsConstants.O_RDONLY, 0)
+        try { android.system.Os.fsync(descriptor) } finally { android.system.Os.close(descriptor) }
     }
 
     private fun finishSession() {

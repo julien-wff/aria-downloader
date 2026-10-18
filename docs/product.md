@@ -40,14 +40,25 @@ deletion or declined Android consent retains the record.
 
 ## Saving and recovery
 
-Transfers download into private staging, then publish through MediaStore Downloads. Single-file
-results go directly into Downloads. Multi-file results preserve safe relative paths under
+New HTTP/HTTPS transfers write directly into pending MediaStore Downloads entries. Their bytes
+remain unavailable to other apps until verification and publication; completion does not copy the
+payload. Pending single-file entries also reside directly in Downloads, using an internal temporary
+filename until publication restores the requested filename. Empty legacy `Downloads/Aria/<task>/`
+recovery folders are cleaned up on startup, publication and deletion; folders containing files remain.
+Existing staged HTTP transfers and protocol downloads retain private staging and copy
+through MediaStore. Single-file results go directly into Downloads. Multi-file results preserve safe
+relative paths under
 `Downloads/Aria-<task UUID>/`. Completed means all selected files are publicly saved. Verification,
 saving and save failure are separate states.
 
-Saving temporarily needs space for both staging and the public copy. Retry saving uses the existing
-staged data and destination identity. Staging remains recoverable until publication succeeds.
-Uninstalling removes unfinished and unexported data; publicly saved files remain.
+Staged transfers temporarily need space for both staging and the public copy. Direct HTTP transfers
+need one payload copy plus private resume metadata. Retry saving preserves downloaded bytes and
+destination identity. Private staging remains recoverable until publication succeeds.
+
+Pause and interruption preserve direct HTTP files and private resume checkpoints. Missing or
+inaccessible pending entries fail without silently replacing their bytes. Android can expire pending
+entries, typically after seven days; resuming refreshes that lifetime. Uninstalling removes private
+resume metadata and unfinished entries cannot be resumed after reinstall. Publicly saved files remain.
 
 Temporary connection, DNS, timeout and server-busy errors retry after 5, 15 and 45 seconds. Waiting
 retries release their queue slot. Retries require an active Android execution authorization.
@@ -64,7 +75,8 @@ progress and controls; denying notification permission still permits transfers a
 Settings use distinct groups for Transfers, Network, Appearance and Background downloads, and
 autosave changes. Defaults are three simultaneous transfers, four connections per server, unlimited
 speed, any network and system appearance. Concurrency accepts one to six transfers; connections
-accept one to sixteen. Unmetered Wi-Fi preference applies to the authorized queue. Connection and
+accept one to sixteen. HTTP transfers use a 4 MiB minimum split size so eligible smaller files can
+use the configured connections when the server supports ranges. Unmetered Wi-Fi preference applies to the authorized queue. Connection and
 speed defaults affect new requests; network and concurrency changes reconcile the queue under
 visible authorization.
 

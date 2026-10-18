@@ -16,6 +16,34 @@ class QueuePersistenceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
 
+    @Test fun v5MigrationKeepsLegacyStorageAndPersistsDirectHttpIdentity() = runBlocking {
+        val root = File(context.cacheDir, "migration-v5-${System.nanoTime()}").apply { mkdirs() }
+        val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }
+        try {
+            // Build the exact previous table from its checked-in schema.
+            val schema = org.json.JSONObject(instrumentation.context.assets.open("schemas/5.json").bufferedReader().use { it.readText() })
+                .getJSONObject("database")
+            SQLiteDatabase.openOrCreateDatabase(File(root, "transfers.db"), null).use { db ->
+                db.execSQL(schema.getJSONArray("entities").getJSONObject(0).getString("createSql").replace("\${TABLE_NAME}", "transfers"))
+                db.execSQL("INSERT INTO transfers (token,url,fileName,desired,status,id,taskId,completedBytes,totalBytes,createdAt) VALUES ('batch','https://example.org/a','a','PAUSED','PAUSED','old','0123456789abcdef',123,1000,1)")
+                db.version = 5
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val old = store.readAll().single()
+                assertFalse(old.directHttp)
+                assertNull(old.pendingUri)
+                assertEquals(123L, old.completedBytes)
+                store.write(old.copy(directHttp = true, pendingUri = "content://downloads/42"))
+            }
+            RoomTransferStore(wrapped).use { store ->
+                val restored = store.readAll().single()
+                assertTrue(restored.directHttp)
+                assertEquals("content://downloads/42", restored.pendingUri)
+                assertNull(restored.publishedUri)
+            }
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun v4MigrationAndFileReviewJournalSurviveDatabaseReopening() = runBlocking {
         val root = File(context.cacheDir, "migration-v4-${System.nanoTime()}").apply { mkdirs() }
         val wrapped = object : ContextWrapper(context) { override fun getNoBackupFilesDir() = root }

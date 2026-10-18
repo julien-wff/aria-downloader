@@ -34,7 +34,7 @@ Piece checksums are never used as whole-file checksums, including when both appe
 
 ## Publication and recovery
 
-Room v5 stores protocol, confirmed selection and an atomic per-file journal for each task. Migration
+Room stores protocol, confirmed selection and an atomic per-file journal for each task. Migration
 from v4 preserves existing HTTP tasks, retry budgets, mappings and published URIs. Each file journal
 stores index, relative path, size, selection, progress, destination URI and publication status.
 

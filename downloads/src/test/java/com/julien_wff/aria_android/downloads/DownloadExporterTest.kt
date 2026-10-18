@@ -36,6 +36,7 @@ class DownloadExporterTest {
                 override fun close() { bytes = toByteArray(); super.close() }
             }
         }
+        override fun verifySize(uri: String, size: Long) { check(bytes.size.toLong() == size) }
         override fun publish(uri: String) { published = true }
     }
 
@@ -47,6 +48,54 @@ class DownloadExporterTest {
         source.parentFile!!.mkdirs()
         source.writeBytes(ByteArray(record.completedBytes.toInt()) { (it % 251).toByte() })
         return record to source
+    }
+
+    @Test fun directPublicationNeverCopiesAndRecoversCommitFailure() = runBlocking {
+        val root = Files.createTempDirectory("direct-export").toFile()
+        val destination = Destination().apply { uri = "content://downloads/1"; bytes = byteArrayOf(1, 2, 3) }
+        var saved = TransferRecord("lease", "https://example.org/file", "file.bin", DesiredState.RUNNING,
+            DownloadStatus.STAGED, taskId = "0123456789abcdef", completedBytes = 3, totalBytes = 3,
+            directHttp = true, pendingUri = destination.uri)
+        val marker = File(root, "${saved.taskId}/.http-complete").apply { parentFile!!.mkdirs(); writeText("3") }
+        try {
+            val exporter = DownloadExporter(root, destination)
+            try {
+                exporter.export(saved, {
+                    if (it.status == DownloadStatus.COMPLETED) throw IOException("Commit failure")
+                    saved = it
+                }, { _, _ -> }, { true })
+                fail("Expected commit failure")
+            } catch (_: IOException) { }
+            assertTrue(destination.published)
+            assertTrue(marker.isFile)
+            assertNull(saved.publishedUri)
+            exporter.export(saved, { saved = it }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, saved.status)
+            assertEquals(destination.uri, saved.publishedUri)
+            assertEquals(0, destination.writes)
+            assertEquals(0, destination.creates)
+            assertFalse(marker.exists())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun directPublicationRejectsMissingMarkerWrongSizeAndRevokedAuthorization() = runBlocking {
+        val root = Files.createTempDirectory("direct-verify").toFile()
+        val destination = Destination().apply { uri = "content://downloads/1"; bytes = byteArrayOf(1, 2, 3) }
+        val record = TransferRecord("lease", "https://example.org/file", "file.bin", DesiredState.RUNNING,
+            DownloadStatus.STAGED, taskId = "0123456789abcdef", completedBytes = 3, totalBytes = 3,
+            directHttp = true, pendingUri = destination.uri)
+        val exporter = DownloadExporter(root, destination)
+        try {
+            try { exporter.export(record, {}, { _, _ -> }, { true }); fail("Missing completion marker") } catch (_: IOException) { }
+            val marker = File(root, "${record.taskId}/.http-complete").apply { parentFile!!.mkdirs(); writeText("3") }
+            destination.bytes = byteArrayOf(1)
+            try { exporter.export(record, {}, { _, _ -> }, { true }); fail("Incorrect size") } catch (_: IllegalStateException) { }
+            destination.bytes = byteArrayOf(1, 2, 3)
+            try { exporter.export(record, {}, { _, _ -> }, { false }); fail("Revoked authorization") } catch (_: IOException) { }
+            assertTrue(marker.exists())
+            assertFalse(destination.published)
+            assertEquals(0, destination.writes)
+        } finally { root.deleteRecursively() }
     }
 
     @Test fun interruptedMultiFilePublicationReusesPublishedAndPendingEntries() = runBlocking {

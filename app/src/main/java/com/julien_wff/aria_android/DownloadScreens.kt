@@ -813,7 +813,7 @@ internal fun statusLabel(status: DownloadStatus): String = when (status) {
     DownloadStatus.FAILED -> "Failed"
     DownloadStatus.CANCELED -> "Canceled"
     DownloadStatus.INTERRUPTED -> "Interrupted"
-    DownloadStatus.VERIFYING -> "Verifying staged files…"
+    DownloadStatus.VERIFYING -> "Verifying downloaded files…"
     DownloadStatus.METADATA -> "Resolving metadata…"
     DownloadStatus.AWAITING_SELECTION -> "Ready to select files"
 }

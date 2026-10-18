@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <aria2/aria2.h>
+#include <aria2/aria_fd.h>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -120,6 +121,13 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(open)(JNIEnv* env, jobject, jobject
         if (!session) throw std::runtime_error("session creation failed");
         owner = std::this_thread::get_id();
     });
+}
+
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(bindOutput)(JNIEnv* env, jobject, jstring path, jint fd) {
+    guarded(env, [&] { requireSession(); checked(aria_android_bind_fd(text(env, path).c_str(), fd)); });
+}
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(flushOutput)(JNIEnv* env, jobject, jstring path) {
+    guarded(env, [&] { requireSession(); checked(aria_android_finish_fd(text(env, path).c_str())); });
 }
 
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(add)(JNIEnv* env, jobject, jstring id,
@@ -246,6 +254,7 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(shutdown)(JNIEnv* env, jobject) {
             checked(status);
         } catch (...) { error = std::current_exception(); }
         aria2::sessionFinal(session);
+        aria_android_clear_fds();
         session = nullptr;
         owner = {};
         if (error) std::rethrow_exception(error);

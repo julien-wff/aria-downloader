@@ -81,6 +81,8 @@ internal data class TransferRecord(
     @ColumnInfo(defaultValue = "'HTTP'") val protocol: DownloadProtocol = DownloadProtocol.HTTP,
     @ColumnInfo(defaultValue = "0") val selectionConfirmed: Boolean = false,
     @ColumnInfo(defaultValue = "''") val files: List<DownloadFile> = emptyList(),
+    @ColumnInfo(defaultValue = "0") val directHttp: Boolean = false,
+    @ColumnInfo(defaultValue = "NULL") val pendingUri: String? = null,
 )
 
 internal interface TransferStore {
@@ -180,7 +182,7 @@ class DownloadController internal constructor(
                         views[record.id] = record.view(status).copy(message = when (status) {
                             DownloadStatus.INTERRUPTED -> "Legacy staging has no recovery mapping. Data is preserved; cancel to remove the task."
                             DownloadStatus.WAITING -> "Transfer interrupted. Resume to continue, or wait for Android to retry its existing job."
-                            DownloadStatus.SAVE_FAILED -> "Saving interrupted. Staged data is preserved; retry saving."
+                            DownloadStatus.SAVE_FAILED -> "Saving interrupted. Downloaded data is preserved; retry saving."
                             else -> record.failure
                         })
                     }
@@ -205,6 +207,7 @@ class DownloadController internal constructor(
                 if (loadFailure != null) return@collect
                 mutex.withLock {
                     val execution = lease ?: return@withLock
+                    if (boundExecution !== execution) return@withLock
                     try {
                         for (id in active.toList()) {
                             val task = snapshot.tasks.find { it.id == registered[id] } ?: continue
@@ -242,7 +245,8 @@ class DownloadController internal constructor(
                                 val failed = failed(current.copy(completedBytes = task.completedBytes,
                                     totalBytes = task.totalBytes), task.errorCode)
                                 save(if (current.protocol != DownloadProtocol.HTTP && task.errorCode == null)
-                                    failed.copy(failure = "Metadata is invalid, unsafe, too large or unsupported. Check the source and select supported files.") else failed)
+                                    failed.copy(failure = "Metadata is invalid, unsafe, too large or unsupported. Check the source and select supported files.")
+                                else if (current.directHttp && task.errorCode == null) failed.copy(failure = "Unable to finish the Downloads file. Partial data is preserved; check storage or retry as a new download.") else failed)
                                 active.remove(id)
                                 continue
                             }
@@ -322,7 +326,8 @@ class DownloadController internal constructor(
         val next = TransferRecord("", request.url, request.fileName, DesiredState.RUNNING, DownloadStatus.SCHEDULED,
             taskId = UUID.randomUUID().toString().replace("-", "").take(16),
             createdAt = maxOf(System.currentTimeMillis(), (records.values.maxOfOrNull { it.createdAt } ?: 0) + 1),
-            connections = settings.connections, speedLimit = settings.speedLimit, referrer = options.referrer, userAgent = options.userAgent, protocol = protocol)
+            connections = settings.connections, speedLimit = settings.speedLimit, referrer = options.referrer, userAgent = options.userAgent, protocol = protocol,
+            directHttp = protocol == DownloadProtocol.HTTP && exporter?.supportsDirectHttp == true)
         save(next)
         replaceBatch(settings)
         next.id
@@ -449,15 +454,37 @@ class DownloadController internal constructor(
     }.sortedBy { it.createdAt }
 
     private suspend fun drain(execution: ExecutionLease) {
-        if (lease !== execution) return
-        for (current in eligible(execution)) {
+        if (lease !== execution || boundExecution !== execution) return
+        for (candidate in eligible(execution)) {
+            var current = candidate
             if (active.size >= batchConcurrency || lease !== execution) break
             if (current.id in active || current.retryAt > nowMillis()) continue
             val existing = registered[current.id]
             if (existing == null) {
-                registered[current.id] = engine.add(EngineRequest(current.url, current.fileName,
-                    EngineOptions(current.connections, current.speedLimit, current.referrer, current.userAgent), EngineTaskId(current.taskId!!),
-                    EngineSourceKind.valueOf(current.protocol.name), current.files.filter { it.selected }.map { it.index }.takeIf { current.selectionConfirmed }))
+                val output = if (current.directHttp) {
+                    try {
+                        requireNotNull(exporter).prepareHttp(current) { save(it) }
+                    } catch (canceled: CancellationException) { throw canceled }
+                    catch (_: Exception) {
+                        save(records.getValue(current.id).copy(status = DownloadStatus.FAILED, desired = DesiredState.PAUSED,
+                            failure = "Unable to access the pending Downloads file. Partial data is preserved; check storage or retry as a new download."))
+                        continue
+                    }
+                } else null
+                current = records.getValue(current.id)
+                if (lease !== execution) break
+                try {
+                    registered[current.id] = engine.add(EngineRequest(current.url, current.fileName,
+                        EngineOptions(current.connections, current.speedLimit, current.referrer, current.userAgent), EngineTaskId(current.taskId!!),
+                        EngineSourceKind.valueOf(current.protocol.name), current.files.filter { it.selected }.map { it.index }.takeIf { current.selectionConfirmed },
+                        httpOutput = output))
+                } catch (canceled: CancellationException) { throw canceled }
+                catch (error: Exception) {
+                    if (!current.directHttp) throw error
+                    save(current.copy(status = DownloadStatus.FAILED, desired = DesiredState.PAUSED,
+                        failure = "Unable to resume the Downloads file safely. Partial data is preserved; check storage or retry as a new download."))
+                    continue
+                }
             } else {
                 // Completion can race a visible batch replacement while the snapshot collector
                 // waits for this lock. A completed native task cannot be resumed.
@@ -642,7 +669,7 @@ class DownloadController internal constructor(
             catch (_: Exception) {
                 mutex.withLock {
                     val failed = records.getValue(id).copy(status = DownloadStatus.SAVE_FAILED,
-                        failure = "Unable to save to Downloads. Staged data is preserved; retry saving after checking storage.")
+                        failure = "Unable to save to Downloads. Downloaded data is preserved; retry saving after checking storage.")
                     runCatching { store.write(failed) }
                     records[id] = failed; views[id] = failed.view(); publish()
                 }

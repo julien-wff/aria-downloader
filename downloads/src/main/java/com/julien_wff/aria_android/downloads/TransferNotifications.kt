@@ -142,7 +142,7 @@ internal class TransferNotifications(
     private fun description(state: DownloadState): String {
         if (state.status != DownloadStatus.DOWNLOADING) return when (state.status) {
             DownloadStatus.SCHEDULED -> "Waiting to start"
-            DownloadStatus.VERIFYING -> "Verifying staged files…"
+            DownloadStatus.VERIFYING -> "Verifying downloaded files…"
             DownloadStatus.METADATA -> "Resolving metadata · Contents have not started"
             DownloadStatus.AWAITING_SELECTION -> "Review files in Aria to start downloading"
             DownloadStatus.WAITING -> state.message ?: "Waiting for network or system permission to run"

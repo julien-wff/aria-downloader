@@ -18,6 +18,144 @@ import org.junit.runner.RunWith
 class PersistenceAndExportTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
+    @Test fun pendingSingleFileUsesDownloadsRootAndRestoresNameAndMimeOnPublication() = runBlocking {
+        val destination = DownloadsDestination(context)
+        val record = TransferRecord("lease", "https://example.org/report", "report-${System.nanoTime()}.pdf",
+            DesiredState.RUNNING, DownloadStatus.SCHEDULED)
+        val uri = destination.create(record)
+        try {
+            context.contentResolver.query(Uri.parse(uri), arrayOf(MediaStore.Downloads.RELATIVE_PATH,
+                MediaStore.Downloads.DISPLAY_NAME), null, null, null)!!.use {
+                assertTrue(it.moveToFirst())
+                assertEquals("${Environment.DIRECTORY_DOWNLOADS}/", it.getString(0))
+                assertEquals("Aria-pending-${record.id}.tmp", it.getString(1))
+            }
+            assertEquals(uri, destination.find(record))
+            destination.output(uri).use { it.write(byteArrayOf(1, 2, 3)) }
+            destination.publish(uri, record)
+            assertEquals(true, destination.isPublished(uri))
+            assertNull(destination.find(record))
+            context.contentResolver.query(Uri.parse(uri), arrayOf(MediaStore.Downloads.RELATIVE_PATH,
+                MediaStore.Downloads.DISPLAY_NAME, MediaStore.Downloads.MIME_TYPE), null, null, null)!!.use {
+                assertTrue(it.moveToFirst())
+                assertEquals("${Environment.DIRECTORY_DOWNLOADS}/", it.getString(0))
+                assertEquals(record.fileName, it.getString(1))
+                assertEquals("application/pdf", it.getString(2))
+            }
+            assertArrayEquals(byteArrayOf(1, 2, 3), context.contentResolver.openInputStream(Uri.parse(uri))!!.use { it.readBytes() })
+        } finally { context.contentResolver.delete(Uri.parse(uri), null, null) }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun legacyFolderRecoveryAndCleanupPreservePendingBytesAndRemoveOnlyEmptyDirectories() = runBlocking {
+        val destination = DownloadsDestination(context)
+        val record = TransferRecord("lease", "https://example.org/file", "legacy.bin", DesiredState.RUNNING, DownloadStatus.PAUSED)
+        val oldPath = "${Environment.DIRECTORY_DOWNLOADS}/Aria/${record.id}/"
+        val uri = requireNotNull(context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            android.content.ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, record.fileName)
+                put(MediaStore.Downloads.RELATIVE_PATH, oldPath)
+                put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }))
+        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Aria/${record.id}")
+        try {
+            destination.output(uri.toString()).use { it.write(byteArrayOf(4, 5, 6)) }
+            assertEquals(uri.toString(), destination.find(record))
+            assertTrue(directory.isDirectory)
+            destination.cleanupLegacyFolders()
+            assertTrue(directory.isDirectory)
+            assertArrayEquals(byteArrayOf(4, 5, 6), context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+            destination.publish(uri.toString(), record)
+            assertFalse("Legacy task directory should be removed after publication", directory.exists())
+            assertArrayEquals(byteArrayOf(4, 5, 6), context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+        } finally { context.contentResolver.delete(uri, null, null); destination.cleanupLegacyFolders() }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun deletingLegacyPendingEntryAllowsEmptyFolderCleanup() = runBlocking {
+        val destination = DownloadsDestination(context)
+        val id = java.util.UUID.randomUUID().toString()
+        val uri = requireNotNull(context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            android.content.ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, "unfinished.bin")
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Aria/$id/")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }))
+        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Aria/$id")
+        try {
+            assertTrue(directory.isDirectory)
+            context.contentResolver.delete(uri, null, null)
+            destination.cleanupLegacyFolders()
+            assertFalse(directory.exists())
+        } finally { context.contentResolver.delete(uri, null, null); destination.cleanupLegacyFolders() }
+    }
+
+    @Test fun directHttpRecoversInsertAndPublicationCommitWindowsWithoutCopying() = runBlocking {
+        val root = File(context.cacheDir, "direct-media-${System.nanoTime()}").apply { mkdirs() }
+        val destination = DownloadsDestination(context)
+        val exporter = DownloadExporter(root, destination)
+        var saved = TransferRecord("lease", "https://example.org/file", "direct-${System.nanoTime()}.bin",
+            DesiredState.RUNNING, DownloadStatus.SCHEDULED, taskId = "0123456789abcdef", directHttp = true)
+        val expected = ByteArray(512_000) { (it % 251).toByte() }
+        val inserted = destination.create(saved)
+        try {
+            // Insert-before-Room crash window reuses the same entry.
+            val output = exporter.prepareHttp(saved) { saved = it }
+            assertEquals(inserted, saved.pendingUri)
+            assertNull(saved.publishedUri)
+            output.open().use { descriptor ->
+                java.io.FileOutputStream(descriptor.fileDescriptor).use {
+                    it.write(expected); it.flush(); it.fd.sync()
+                }
+            }
+            val journal = File(root, "${saved.taskId}/.http-complete").apply {
+                parentFile!!.mkdirs(); writeText(expected.size.toString())
+            }
+            saved = saved.copy(status = DownloadStatus.STAGED, completedBytes = expected.size.toLong(), totalBytes = expected.size.toLong())
+            try {
+                exporter.export(saved, {
+                    if (it.status == DownloadStatus.COMPLETED) throw IOException("Lost completion commit")
+                    saved = it
+                }, { _, _ -> }, { false })
+                fail("Revoked authorization must prevent publication")
+            } catch (_: IOException) { }
+            assertEquals(false, destination.isPublished(inserted))
+            try {
+                exporter.export(saved, {
+                    if (it.status == DownloadStatus.COMPLETED) throw IOException("Lost completion commit")
+                    saved = it
+                }, { _, _ -> }, { true })
+                fail("Expected completion commit failure")
+            } catch (_: IOException) { }
+            assertEquals(true, destination.isPublished(inserted))
+            assertTrue(journal.isFile)
+            assertNull(saved.publishedUri)
+            // Already-public reconciliation needs neither a new output nor the marker.
+            journal.delete()
+            exporter.export(saved, { saved = it }, { _, _ -> }, { true })
+            assertEquals(DownloadStatus.COMPLETED, saved.status)
+            assertEquals(inserted, saved.publishedUri)
+            assertFalse(File(root, saved.taskId!!).exists())
+            assertArrayEquals(expected, context.contentResolver.openInputStream(Uri.parse(inserted))!!.use { it.readBytes() })
+            try { output.open().close(); fail("Public entry must never reopen for writing") } catch (_: IllegalStateException) { }
+        } finally { context.contentResolver.delete(Uri.parse(inserted), null, null); root.deleteRecursively() }
+    }
+
+    @Test fun directHttpMissingEntryNeverCreatesAReplacement() = runBlocking {
+        val root = File(context.cacheDir, "direct-missing-${System.nanoTime()}").apply { mkdirs() }
+        val destination = DownloadsDestination(context)
+        val exporter = DownloadExporter(root, destination)
+        var saved = TransferRecord("lease", "https://example.org/file", "missing.bin", DesiredState.RUNNING,
+            DownloadStatus.SCHEDULED, taskId = "0123456789abcdef", directHttp = true)
+        try {
+            exporter.prepareHttp(saved) { saved = it }
+            context.contentResolver.delete(Uri.parse(saved.pendingUri), null, null)
+            try { exporter.prepareHttp(saved) { saved = it }; fail("Missing entry must fail") } catch (_: IllegalStateException) { }
+            assertNull(destination.find(saved))
+        } finally { saved.pendingUri?.let { context.contentResolver.delete(Uri.parse(it), null, null) }; root.deleteRecursively() }
+    }
+
     @Test fun multiFilePublicationRecoversPerFileJournalAndPreservesRelativeFolders() = runBlocking {
         val root = File(context.cacheDir, "multi-media-${System.nanoTime()}").apply { mkdirs() }
         val destination = DownloadsDestination(context)
@@ -139,7 +277,7 @@ class PersistenceAndExportTest {
             val second = record.copy(id = java.util.UUID.randomUUID().toString())
             other = destination.create(second)
             destination.output(other).use { it.write(byteArrayOf(9, 8, 7)) }
-            destination.publish(other)
+            destination.publish(other, second)
             assertNotEquals(inserted, other)
             assertEquals(true, destination.isPublished(inserted))
             assertEquals(true, destination.isPublished(other))

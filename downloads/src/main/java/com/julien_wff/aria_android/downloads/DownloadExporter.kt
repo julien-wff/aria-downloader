@@ -5,6 +5,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import com.julien_wff.aria_android.aria2.EngineHttpOutput
 import android.provider.MediaStore
 import java.io.File
 import java.io.IOException
@@ -20,6 +22,8 @@ internal interface ExportDestination {
     /** Null means the entry was removed (for example, an expired pending entry). */
     fun isPublished(uri: String): Boolean?
     fun output(uri: String): OutputStream
+    fun openForTransfer(uri: String): ParcelFileDescriptor = error("Direct output unavailable")
+    fun verifySize(uri: String, size: Long) { error("Direct output unavailable") }
     fun publish(uri: String)
     fun publish(uri: String, record: TransferRecord) = publish(uri)
 }
@@ -27,16 +31,25 @@ internal interface ExportDestination {
 internal class DownloadsDestination(private val context: Context) : ExportDestination {
     private val resolver get() = context.contentResolver
     private val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-    // Pending entries have a recoverable task namespace until their URI is durable in Room.
-    // Publication moves the completed file to Downloads; MediaStore resolves name collisions.
-    private fun path(record: TransferRecord) = "${Environment.DIRECTORY_DOWNLOADS}/Aria/${record.id}/"
+    // A deterministic pending filename closes the insert-before-Room crash window without
+    // creating temporary public directories. Publication restores the requested name.
+    private fun pendingName(record: TransferRecord) = "Aria-pending-${record.id}.tmp"
+    private fun legacyPath(record: TransferRecord) = "${Environment.DIRECTORY_DOWNLOADS}/Aria/${record.id}/"
+    private fun finalPath(record: TransferRecord): String {
+        val group = record.id.substringBefore("-file-")
+        return if ("-file-" in record.id && record.files.size > 1)
+            "${Environment.DIRECTORY_DOWNLOADS}/Aria-$group/" + record.fileName.substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" }
+            else "${Environment.DIRECTORY_DOWNLOADS}/"
+    }
 
     override fun find(record: TransferRecord): String? = resolver.query(collection,
         arrayOf(MediaStore.Downloads._ID), Bundle().apply {
             putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
-                "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ?")
+                "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ? AND " +
+                    "((${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.DISPLAY_NAME} = ? " +
+                    "AND ${MediaStore.Downloads.IS_PENDING} = 1) OR ${MediaStore.Downloads.RELATIVE_PATH} = ?)")
             putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
-                arrayOf(path(record), context.packageName))
+                arrayOf(context.packageName, finalPath(record), pendingName(record), legacyPath(record)))
             putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
         }, null).let { it ?: throw IOException("Unable to inspect existing Downloads entries") }.use { cursor ->
         if (cursor.moveToFirst()) Uri.withAppendedPath(collection, cursor.getLong(0).toString()).toString()
@@ -45,9 +58,10 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
 
     override fun create(record: TransferRecord): String = resolver.insert(collection,
         ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, record.fileName.substringAfterLast('/'))
-            put(MediaStore.Downloads.MIME_TYPE, mimeForFileName(record.fileName))
-            put(MediaStore.Downloads.RELATIVE_PATH, path(record))
+            put(MediaStore.Downloads.DISPLAY_NAME, pendingName(record))
+            // Keep the temporary suffix stable regardless of the final file's media type.
+            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+            put(MediaStore.Downloads.RELATIVE_PATH, finalPath(record))
             put(MediaStore.Downloads.IS_PENDING, 1)
         })?.toString() ?: throw IOException("Unable to create a Downloads entry")
 
@@ -61,21 +75,59 @@ internal class DownloadsDestination(private val context: Context) : ExportDestin
     override fun output(uri: String): OutputStream = resolver.openOutputStream(Uri.parse(uri), "wt")
         ?: throw IOException("Unable to write the Downloads entry")
 
+    override fun openForTransfer(uri: String): ParcelFileDescriptor {
+        check(isPublished(uri) == false) { "Pending Downloads entry is unavailable" }
+        // Refresh the platform's pending-entry lifetime each time work resumes.
+        check(resolver.update(Uri.parse(uri), ContentValues().apply {
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }, "${MediaStore.Downloads.IS_PENDING} = ?", arrayOf("1")) == 1)
+        return resolver.openFileDescriptor(Uri.parse(uri), "rw")
+            ?: throw IOException("Unable to open the Downloads entry")
+    }
+
+    override fun verifySize(uri: String, size: Long) {
+        resolver.openFileDescriptor(Uri.parse(uri), "r")?.use {
+            check(it.statSize == size) { "Downloads file size changed" }
+        } ?: throw IOException("Downloads file is unavailable")
+    }
+
     override fun publish(uri: String) = publish(uri, TransferRecord("", "", "download", DesiredState.PAUSED, DownloadStatus.EXPORTING))
 
     override fun publish(uri: String, record: TransferRecord) {
-        val group = record.id.substringBefore("-file-")
-        val relative = if ("-file-" in record.id && record.files.size > 1)
-            "${Environment.DIRECTORY_DOWNLOADS}/Aria-$group/" + record.fileName.substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" }
-            else "${Environment.DIRECTORY_DOWNLOADS}/"
         if (resolver.update(Uri.parse(uri), ContentValues().apply {
-                put(MediaStore.Downloads.RELATIVE_PATH, relative)
+                put(MediaStore.Downloads.DISPLAY_NAME, record.fileName.substringAfterLast('/'))
+                put(MediaStore.Downloads.MIME_TYPE, mimeForFileName(record.fileName))
+                put(MediaStore.Downloads.RELATIVE_PATH, finalPath(record))
                 put(MediaStore.Downloads.IS_PENDING, 0)
             }, null, null) != 1) throw IOException("Unable to publish the Downloads entry")
+        cleanupLegacyFolders()
     }
+
+    /** Remove only empty, UUID-named legacy task directories; never recursively delete files. */
+    @Suppress("DEPRECATION")
+    fun cleanupLegacyFolders() {
+        runCatching {
+            val root = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Aria")
+            if (java.nio.file.Files.isSymbolicLink(root.toPath())) return
+            val canonicalRoot = root.canonicalFile
+            root.listFiles()?.forEach { directory ->
+                if (directory.name.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-file-[0-9]+)?")) &&
+                    !java.nio.file.Files.isSymbolicLink(directory.toPath()) && directory.canonicalFile.parentFile == canonicalRoot) {
+                    // A trailing slash makes remove(3) directory-only. It cannot delete a file,
+                    // and the filesystem rejects nonempty directories even if listing hid files.
+                    runCatching { android.system.Os.remove(directory.path + "/") }
+                }
+            }
+            runCatching { android.system.Os.remove(root.path + "/") }
+        }
+    }
+
 }
 
 internal interface TransferExporter {
+    val supportsDirectHttp: Boolean get() = false
+    suspend fun prepareHttp(record: TransferRecord, persist: suspend (TransferRecord) -> Unit): EngineHttpOutput =
+        error("Direct output unavailable")
     suspend fun cleanup(record: TransferRecord) { }
     suspend fun export(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
         progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord
@@ -86,8 +138,23 @@ internal class DownloadExporter(
     private val stagingRoot: File,
     private val destination: ExportDestination,
 ) : TransferExporter {
+    override val supportsDirectHttp = true
+
+    override suspend fun prepareHttp(record: TransferRecord, persist: suspend (TransferRecord) -> Unit): EngineHttpOutput =
+        withContext(Dispatchers.IO) {
+            require(record.directHttp && record.protocol == DownloadProtocol.HTTP && record.files.isEmpty())
+            val uri = record.pendingUri ?: run {
+                check(record.completedBytes == 0L) { "Downloads identity is unavailable" }
+                destination.find(record) ?: destination.create(record)
+            }
+            check(destination.isPublished(uri) == false) { "Pending Downloads entry is unavailable" }
+            persist(record.copy(pendingUri = uri))
+            EngineHttpOutput { destination.openForTransfer(uri) }
+        }
+
     override suspend fun export(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
         progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord {
+        if (record.directHttp) return publishHttp(record, persist, progress, authorized)
         if (record.files.isEmpty()) return exportOne(record, record.fileName, persist, progress, authorized)
         var next = record.copy(status = DownloadStatus.VERIFYING)
         persist(next)
@@ -128,6 +195,35 @@ internal class DownloadExporter(
         persist(next)
         runCatching { cleanup(next) }
         return next
+    }
+
+    private suspend fun publishHttp(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
+        progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord = withContext(Dispatchers.IO) {
+        require(record.protocol == DownloadProtocol.HTTP && record.files.isEmpty())
+        val uri = requireNotNull(record.pendingUri) { "Downloads identity is unavailable" }
+        var next = record.copy(status = DownloadStatus.VERIFYING)
+        persist(next)
+        val published = destination.isPublished(uri) ?: throw IOException("Downloads entry is unavailable")
+        if (!published) {
+            val taskId = requireNotNull(record.taskId)
+            require(taskId.matches(Regex("[0-9a-f]{16}")))
+            val directory = File(stagingRoot, taskId).canonicalFile
+            require(directory.parentFile == stagingRoot.canonicalFile)
+            check(File(directory, ".http-complete").readText().toLong() == record.completedBytes) {
+                "HTTP completion journal is unavailable"
+            }
+            destination.verifySize(uri, record.completedBytes)
+            currentCoroutineContext().ensureActive()
+            if (!authorized()) throw IOException("Saving interrupted; retry saving to continue")
+            next = next.copy(status = DownloadStatus.EXPORTING)
+            persist(next)
+            destination.publish(uri, record)
+        }
+        next = next.copy(status = DownloadStatus.COMPLETED, publishedUri = uri, failure = null)
+        persist(next)
+        progress(record.completedBytes, record.completedBytes)
+        runCatching { cleanup(next) }
+        next
     }
 
     private suspend fun exportOne(record: TransferRecord, sourcePath: String, persist: suspend (TransferRecord) -> Unit,

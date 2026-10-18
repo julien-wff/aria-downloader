@@ -2,6 +2,9 @@ package com.julien_wff.aria_android.aria2
 
 internal interface NativeBackend {
     fun open(options: Array<String>)
+    fun bindOutput(path: String, fd: Int) { error("Direct output unavailable") }
+    /** Completed writers must be closed; flush bytes and release the registered descriptor. */
+    fun flushOutput(path: String) { error("Direct output unavailable") }
     fun add(id: String, url: String, options: Array<String>)
     fun addMirrors(id: String, urls: Array<String>, options: Array<String>) { require(urls.size == 1); add(id, urls.single(), options) }
     fun addTorrent(id: String, path: String, options: Array<String>) { error("Torrent unavailable") }
@@ -22,6 +25,8 @@ internal class JniBackend : NativeBackend {
         init { System.loadLibrary("aria_jni") }
     }
     external override fun open(options: Array<String>)
+    external override fun bindOutput(path: String, fd: Int)
+    external override fun flushOutput(path: String)
     external override fun add(id: String, url: String, options: Array<String>)
     external override fun addMirrors(id: String, urls: Array<String>, options: Array<String>)
     external override fun addTorrent(id: String, path: String, options: Array<String>)

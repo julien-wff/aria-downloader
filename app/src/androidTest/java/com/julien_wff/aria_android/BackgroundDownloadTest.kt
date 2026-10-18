@@ -148,12 +148,14 @@ class BackgroundDownloadTest {
                         }
                         await { it.status == DownloadStatus.DOWNLOADING && it.completedBytes > 128 * 1024 }
                         withContext(Dispatchers.Main) { controller.pause() }
-                        val directory = File(context.noBackupFilesDir, "aria2").listFiles()!!.single { File(it, name).exists() }
-                        assertTrue(File(directory, "$name.aria2").exists())
+                        val task = controller.tasks.value.single { it.state.fileName == name }
+                        val (directory, pending) = context.httpStorageForTest(task.id)
+                        assertTrue(File(directory, "payload.aria2").exists())
+                        assertFalse(File(directory, "payload").exists())
                         server.failNext.set(true)
                         withContext(Dispatchers.Main) { controller.resume() }
                         await { it.status == DownloadStatus.WAITING && it.retryCount == 1 }
-                        assertTrue(File(directory, name).exists())
+                        context.contentResolver.openFileDescriptor(pending, "r")!!.use { assertTrue(it.statSize > 0) }
                         assertEquals(29, controller.state.value.engineCode)
                         await { it.status == DownloadStatus.COMPLETED }
                         assertEquals(1, controller.state.value.retryCount)
@@ -171,7 +173,7 @@ class BackgroundDownloadTest {
                                 digest.digest()
                             }
                             assertArrayEquals(server.hash(), hash)
-                            assertFalse(File(directory, name).exists())
+                            assertFalse(directory.exists())
                         } finally { context.contentResolver.delete(uri, null, null) }
                     } finally { withContext(Dispatchers.Main) { controller.cancel() } }
                 }

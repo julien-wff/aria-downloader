@@ -31,7 +31,7 @@ internal interface TransferDao {
     suspend fun put(record: TransferRecord)
 }
 
-@Database(entities = [TransferRecord::class], version = 5, exportSchema = true)
+@Database(entities = [TransferRecord::class], version = 6, exportSchema = true)
 @TypeConverters(ProtocolConverters::class)
 internal abstract class TransferDatabase : RoomDatabase() {
     abstract fun transfers(): TransferDao
@@ -72,10 +72,17 @@ internal val TRANSFER_MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+internal val TRANSFER_MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE transfers ADD COLUMN directHttp INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE transfers ADD COLUMN pendingUri TEXT DEFAULT NULL")
+    }
+}
+
 /** Kept beside staging and excluded from backup; a restored database alone cannot resume files. */
 internal class RoomTransferStore(context: Context) : TransferStore, AutoCloseable {
     private val database = Room.databaseBuilder(context.applicationContext,
-        TransferDatabase::class.java, File(context.noBackupFilesDir, "transfers.db").absolutePath).addMigrations(TRANSFER_MIGRATION_1_2, TRANSFER_MIGRATION_2_3, TRANSFER_MIGRATION_3_4, TRANSFER_MIGRATION_4_5).build()
+        TransferDatabase::class.java, File(context.noBackupFilesDir, "transfers.db").absolutePath).addMigrations(TRANSFER_MIGRATION_1_2, TRANSFER_MIGRATION_2_3, TRANSFER_MIGRATION_3_4, TRANSFER_MIGRATION_4_5, TRANSFER_MIGRATION_5_6).build()
     private val legacy = AtomicTransferStore(context)
 
     override suspend fun read(): TransferRecord? {

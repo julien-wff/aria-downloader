@@ -20,6 +20,7 @@ class DownloadQueueTest {
         override suspend fun configureConcurrency(limit: Int) { configured = limit }
         override suspend fun start() { snapshots.value = snapshots.value.copy(started = true) }
         override suspend fun add(request: EngineRequest): EngineTaskId {
+            check(snapshots.value.started) { "Engine is not started" }
             requests += request
             val id = request.taskId!!
             snapshots.value = snapshots.value.copy(tasks = snapshots.value.tasks + EngineTaskSnapshot(id, EngineTaskState.DOWNLOADING))
@@ -43,7 +44,7 @@ class DownloadQueueTest {
             })
         }
     }
-    private class Fixture(scope: TestScope, initial: List<TransferRecord> = emptyList()) {
+    private class Fixture(scope: TestScope, initial: List<TransferRecord> = emptyList(), direct: Boolean = false) {
         val saved = initial.associateBy { it.id }.toMutableMap()
         val engine = Engine()
         var token = ""
@@ -53,6 +54,8 @@ class DownloadQueueTest {
         var batchWriteFails = false
         var exportGate: CompletableDeferred<Unit>? = null
         var failExport = false
+        var failPrepare = false
+        var prepares = 0
         val controller = DownloadController(engine, object : TransferStore {
             override suspend fun read() = saved.values.maxByOrNull { it.createdAt }
             override suspend fun readAll() = saved.values.toList()
@@ -66,6 +69,13 @@ class DownloadQueueTest {
             override fun schedule(token: String): Boolean { this@Fixture.token = token; schedules++; return schedulingSucceeds }
             override fun cancel() { }
         }, scope.backgroundScope, object : TransferExporter {
+            override val supportsDirectHttp = direct
+            override suspend fun prepareHttp(record: TransferRecord, persist: suspend (TransferRecord) -> Unit): EngineHttpOutput {
+                prepares++
+                if (failPrepare) throw java.io.IOException("Missing entry")
+                persist(record.copy(pendingUri = "content://downloads/${record.id}"))
+                return EngineHttpOutput { error("Fake engine must not open output") }
+            }
             override suspend fun export(record: TransferRecord, persist: suspend (TransferRecord) -> Unit,
                 progress: (Long, Long) -> Unit, authorized: () -> Boolean): TransferRecord {
                 exportGate?.await()
@@ -77,6 +87,44 @@ class DownloadQueueTest {
         fun authorize(): ExecutionLease = ExecutionLease(token) { finished++ }.also { controller.authorize(it) }
         fun state(id: String) = controller.tasks.value.first { it.id == id }.state
         fun engineId(id: String) = EngineTaskId(saved.getValue(id).taskId!!)
+    }
+
+    @Test fun restoredSnapshotCannotAdmitDownloadsBeforeExecutionStartup() = runTest {
+        val record = TransferRecord("restored-batch", "https://example.org/file", "file.bin", DesiredState.RUNNING,
+            DownloadStatus.DOWNLOADING, taskId = "0123456789abcdef", directHttp = true, pendingUri = "content://downloads/1")
+        val f = Fixture(this, listOf(record), direct = true)
+        // Authorize before the initial persisted-state and stopped-engine projections run.
+        // The collector must wait until this lease has actually started the engine.
+        f.controller.authorize(ExecutionLease("restored-batch") { f.finished++ })
+        runCurrent()
+        assertEquals(1, f.engine.requests.size)
+        assertTrue(f.engine.snapshots.value.started)
+        assertEquals(DownloadStatus.DOWNLOADING, f.state(record.id).status)
+        assertNotNull(f.engine.requests.single().httpOutput)
+    }
+
+    @Test fun directDestinationIsPersistedOnlyUnderAuthorizationAndMissingEntryDoesNotStartNetwork() = runTest {
+        val f = Fixture(this, direct = true)
+        val id = f.add("direct.bin")
+        runCurrent()
+        assertTrue(f.saved.getValue(id).directHttp)
+        assertNull(f.saved.getValue(id).pendingUri)
+        assertEquals(0, f.prepares)
+        assertTrue(f.engine.requests.isEmpty())
+        f.authorize(); runCurrent()
+        assertEquals(1, f.prepares)
+        assertNotNull(f.saved.getValue(id).pendingUri)
+        assertNotNull(f.engine.requests.single().httpOutput)
+        val restored = Fixture(this, listOf(f.saved.getValue(id)), direct = true)
+        runCurrent()
+        assertEquals(0, restored.prepares)
+        assertEquals(0, restored.schedules)
+        restored.failPrepare = true
+        restored.controller.resumeTask(id)
+        restored.authorize(); runCurrent()
+        assertEquals(DownloadStatus.FAILED, restored.state(id).status)
+        assertTrue(restored.engine.requests.isEmpty())
+        assertEquals(f.saved.getValue(id).pendingUri, restored.saved.getValue(id).pendingUri)
     }
 
     @Test fun metadataReviewReleasesSlotAndRequiresExplicitSelectionAcrossRecreation() = runTest {

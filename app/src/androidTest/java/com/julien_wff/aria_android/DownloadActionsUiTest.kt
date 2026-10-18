@@ -76,7 +76,7 @@ class DownloadActionsUiTest {
                 id = withContext(Dispatchers.Main) { controller.enqueue(server.url, name, DownloadSettings(connections = 1)) }
                 withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.completedBytes > 0 } } }
                 controller.cancelTask(id!!)
-                directory = File(compose.activity.noBackupFilesDir, "aria2").listFiles()!!.single { File(it, name).exists() }
+                directory = compose.activity.httpStorageForTest(id!!).first
                 File(directory, "cleanup-test").writeText("retained partial data")
                 assertTrue(directory!!.setWritable(false, false))
                 assertFalse(directory!!.canWrite())

@@ -23,11 +23,13 @@ Activity, job service and notification receiver.
 3. `TransferJobService` supplies an execution lease for that invocation, attaches its notification
    and binds the process to the job's assigned network.
 4. `DownloadController` serializes changes and admits FIFO work only for a matching authorization.
-   Stale leases and notification tokens cannot control newer batches.
+   Stale leases and notification tokens cannot control newer batches. Restored engine snapshots
+   cannot admit work until the matching lease has started the engine.
 5. `NativeDownloadEngine` serializes native calls on one dedicated owner thread and emits immutable
    snapshots. Only one native engine can run per process.
-6. Verified staged payloads leave the network queue and enter serialized public export outside the
-   coordinator lock. Completion follows durable publication.
+6. Verified payloads leave the network queue and enter serialized public publication outside the
+   coordinator lock. New HTTP payloads already reside in pending MediaStore entries; legacy and
+   protocol payloads copy from private staging. Completion follows durable publication.
 
 Network changes checkpoint/restart the native session to refresh network and DNS. Job revocation
 stops its network work. Constraint waiting preserves desired running intent. User pause/cancel
@@ -44,11 +46,13 @@ See [protocol details](advanced-protocols.md).
 | Owner                | Stored state                                                                                        | Lifetime                           |
 |----------------------|-----------------------------------------------------------------------------------------------------|------------------------------------|
 | Room                 | User intent, observed status, batch membership, engine mapping, retries and per-file export journal | Durable, private no-backup storage |
-| aria2 staging        | Partial files, retained metadata, control files and native checkpoints                              | Durable, private no-backup storage |
+| aria2 private files  | Legacy/protocol partials, retained metadata, control files and HTTP completion markers                | Durable, private no-backup storage |
+| MediaStore pending   | New HTTP payload bytes                                                                              | Until publication, deletion or expiry |
 | DataStore            | Queue defaults, connection/speed limits, network preference and appearance                          | Durable preferences                |
 | Coordinator insights | Speed samples and bounded piece summaries                                                           | Current process only               |
 
-Room schema version is 5, with explicit migrations from versions 1 through 4. The legacy JSON intent
+Room schema version is 6, with explicit migrations from versions 1 through 5. Migration from v5
+keeps existing transfers on private staging and adds direct HTTP storage mode and pending URI fields. The legacy JSON intent
 record imports once without guessing a missing staging map. Desired state and observed status are
 separate: waiting for a network is not a user pause. The coordinator reconciles Room and native
 identities instead of blindly loading the native session file. Native checkpoints run every five
@@ -61,10 +65,19 @@ task list.
 
 ## Publication and security boundaries
 
-The engine owns private staged bytes. `:downloads` owns MediaStore entries and public completion.
-Pending entries and persisted per-file URIs cover insert and publication crash windows. Retry saving
-preserves destination identity and never truncates an already public file. Staging cleanup follows
-successful durable publication of every selected file.
+The engine writes payload bytes; `:downloads` owns MediaStore entries and public completion.
+New HTTP tasks persist their pending URI before the engine opens a non-truncating read/write
+descriptor. JNI duplicates it on the engine owner thread. A native path-to-descriptor adapter directs
+HTTP payload I/O and stat checks to that descriptor while keeping control files private. No public
+filesystem path or broad storage permission is required. Native writers close and flush before a
+private completion marker is committed; only then can the coordinator publish that same entry.
+Pending entries use deterministic temporary filenames in their final destination directory, so
+single-file transfers need no temporary public folders. Matching owner, pending name and directory
+covers the insert-before-Room crash window; persisted URIs cover publication. Legacy task-directory
+lookups remain supported, and empty legacy `Downloads/Aria` directories are cleaned without recursive
+deletion or removing files. Retry saving preserves destination identity and never truncates an
+already public file. Private resume metadata and staging cleanup follow successful durable publication of every selected file. Direct HTTP publication retries reconcile an
+already-public entry without reopening it for writing; missing pending entries fail without replacement.
 
 Validate URLs, filenames and protocol paths before native execution. Byte counters are 64-bit. JNI
 copies bounded data and translates exceptions; native pointers stay inside the bridge. Errors

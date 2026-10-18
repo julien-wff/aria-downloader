@@ -76,13 +76,18 @@ does not grant background runtime.
   transfer operations require start.
 - Task IDs remain stable within the instance. Each task gets a private directory under
   `noBackupFilesDir/aria2` (partial data and session URLs stay out of backup)
-  and caller-validated HTTP filenames or validated protocol-relative paths. Options expose bounded
-  connection counts, speed limits, HTTP referrer and User-Agent. Zero means no speed limit. URL
+  and caller-validated HTTP filenames or validated protocol-relative paths. HTTP requests can provide
+  an `EngineHttpOutput` that reopens a seekable read/write descriptor each session. Payloads then use
+  the internal logical name `payload`; no private payload file is created. Control files and the
+  `.http-complete` marker stay private. The caller owns MediaStore identity and publication.
+  Options expose bounded
+  connection counts, speed limits, HTTP referrer and User-Agent. HTTP/HTTPS transfers use a 4 MiB
+  minimum split size; protocol payload settings retain upstream defaults. Zero means no speed limit. URL
   credentials and unsafe metadata paths are rejected. Metalink children use deterministic per-file
   GIDs and sequential admission within their parent slot. Torrent metadata retrieval cannot start
   payload downloads.
 - `remove()` cancels work without deleting staged files. `:downloads` owns deletion and public
-  export. Engine completion means selected staged files are verified; public completion belongs to
+  export. Engine completion means selected payloads are verified and direct HTTP bytes are flushed; public completion belongs to
   the downloads coordinator.
 - Native execution ends when all tasks are paused or terminal. Explicit resume reconstructs the
   session and uses the existing control files. Requests and task intent are reconstructed from Room,
@@ -145,3 +150,15 @@ an OpenSSL linking exception; OpenSSL is Apache-2.0, c-ares and Expat use MIT li
 uses the Zlib license. Preserve these notices and corresponding pinned source/build scripts when
 preparing a release. Project licensing and corresponding-source distribution remain unresolved.
 See [release operations](../../docs/releases.md) for the automated APK pipeline.
+
+## Android HTTP descriptor adapter
+
+`native/patches/http-fd.patch` adapts the pinned upstream `File` stat checks and disk-writer open
+operation. `aria_fd.h` and `aria_fd_impl.h` maintain owner-thread-only mappings from validated
+logical payload paths to duplicated descriptors. Registered files cannot be renamed, removed or
+recreated over non-empty data by aria2. Resume requires the private control file; completed transfers
+can reconcile their durable completion marker without another HTTP request.
+
+The build applies the patch to per-ABI source copies, leaving checksum-verified upstream sources
+unchanged. Patch and header contents participate in the native build fingerprint and Gradle inputs.
+Only HTTP payloads opt into this adapter; metadata and protocol payload storage remain unchanged.

@@ -49,10 +49,9 @@ class ProcessDeathRecoveryTest {
                 while (true) {
                     val tasks = controller.tasks.value.filter { it.state.fileName in names }
                     check(tasks.none { it.state.status in setOf(DownloadStatus.FAILED, DownloadStatus.SAVE_FAILED) })
-                    val checkpoints = File(context.noBackupFilesDir, "aria2").listFiles().orEmpty()
                     if (tasks.size == 2 && tasks.all { task ->
                         task.state.status == DownloadStatus.DOWNLOADING && task.state.completedBytes > 256 * 1024 &&
-                            checkpoints.any { File(it, "${task.state.fileName}.aria2").isFile }
+                            File(context.httpStorageForTest(task.id).first, "payload.aria2").isFile
                     }) break
                     delay(100)
                 }

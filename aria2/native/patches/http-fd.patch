@@ -1,0 +1,66 @@
+--- a/src/File.cc
++++ b/src/File.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "File.h"
++#include "aria_fd_impl.h"
+ 
+ #include <stdlib.h>
+ #include <sys/types.h>
+@@ -70,6 +71,8 @@
+ 
+ int File::fillStat(a2_struct_stat& fstat)
+ {
++  int fd = androidPayloadFd(name_);
++  if (fd >= 0) return a2fstat(fd, &fstat);
+   return a2stat(utf8ToWChar(name_).c_str(), &fstat);
+ }
+ 
+@@ -109,6 +112,7 @@
+ 
+ bool File::remove()
+ {
++  if (androidPayloadFd(name_) >= 0) { errno = EPERM; return false; }
+   if (isFile()) {
+     return a2unlink(utf8ToWChar(name_).c_str()) == 0;
+   }
+@@ -289,6 +293,9 @@
+ 
+ bool File::renameTo(const std::string& dest)
+ {
++  if (androidPayloadFd(name_) >= 0 || androidPayloadFd(dest) >= 0) {
++    errno = EPERM; return false;
++  }
+ #ifdef __MINGW32__
+   // MinGW's rename() doesn't delete an existing destination.  Better
+   // to use MoveFileEx, which usually provides atomic move in aria2
+--- a/src/AbstractDiskWriter.cc
++++ b/src/AbstractDiskWriter.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "AbstractDiskWriter.h"
++#include "aria_fd.h"
+ 
+ #include <unistd.h>
+ #ifdef HAVE_MMAP
+@@ -212,6 +213,18 @@
+ int openFileWithFlags(const std::string& filename, int flags,
+                       error_code::Value errCode)
+ {
++  int payload = androidPayloadFd(filename);
++  if (payload >= 0) {
++    // A registered destination is always opened without truncation. New entries
++    // are empty; an unexpected recreation must preserve partial data and fail.
++    struct stat info;
++    if (fstat(payload, &info) != 0 || ((flags & O_TRUNC) && info.st_size != 0)) {
++      throw DL_ABORT_EX3(EIO, "HTTP destination recreation rejected", errCode);
++    }
++    int copy = fcntl(payload, F_DUPFD_CLOEXEC, 0);
++    if (copy < 0) throw DL_ABORT_EX3(errno, "HTTP destination open failed", errCode);
++    return copy;
++  }
+   int fd;
+   while ((fd = a2open(utf8ToWChar(filename).c_str(), flags, OPEN_MODE)) == -1 &&
+          errno == EINTR)

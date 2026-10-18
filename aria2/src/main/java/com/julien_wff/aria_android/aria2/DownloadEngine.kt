@@ -1,5 +1,6 @@
 package com.julien_wff.aria_android.aria2
 
+import android.os.ParcelFileDescriptor
 import java.net.URI
 import kotlinx.coroutines.flow.StateFlow
 
@@ -64,6 +65,11 @@ data class EngineFile(
     val supported: Boolean = true,
 )
 
+/** Reopened for each session; the engine closes it after native code duplicates it. */
+fun interface EngineHttpOutput {
+    fun open(): ParcelFileDescriptor
+}
+
 data class EngineRequest(
     val url: String,
     val fileName: String = "download",
@@ -72,9 +78,11 @@ data class EngineRequest(
     val taskId: EngineTaskId? = null,
     val kind: EngineSourceKind = EngineSourceKind.HTTP,
     val selectedFiles: List<Int>? = null,
+    val httpOutput: EngineHttpOutput? = null,
 
 ) {
     init {
+        require(httpOutput == null || kind == EngineSourceKind.HTTP)
         require(taskId == null || taskId.value.matches(Regex("[0-9a-f]{16}"))) { "Invalid staging identity" }
         val uri = try { URI(url) } catch (_: Exception) {
             throw IllegalArgumentException("An absolute HTTP or HTTPS URL is required")

@@ -14,6 +14,7 @@ import urllib.request
 MODULE = Path(__file__).resolve().parents[1]
 CATALOG = MODULE.parent / "gradle/libs.versions.toml"
 SOURCES = Path(__file__).with_name("sources.json")
+PATCHES = Path(__file__).with_name("patches")
 ABIS = {"arm64-v8a": ("aarch64-linux-android", "android-arm64"),
         "x86_64": ("x86_64-linux-android", "android-x86_64")}
 
@@ -70,7 +71,8 @@ def build(sdk, abi, root, sources, versions, jobs):
     stamp = prefix / ".fingerprint"
     native_versions = {name: versions[name] for name in (*sources, "ndk", "cmake")}
     fingerprint = hashlib.sha256(Path(__file__).read_bytes() + SOURCES.read_bytes() +
-                                 json.dumps(native_versions, sort_keys=True).encode()).hexdigest()
+                                 json.dumps(native_versions, sort_keys=True).encode() +
+                                 b"".join(p.read_bytes() for p in sorted(PATCHES.iterdir()))).hexdigest()
     if stamp.exists() and stamp.read_text() == fingerprint:
         return
     work = root / "work" / abi
@@ -125,7 +127,13 @@ def build(sdk, abi, root, sources, versions, jobs):
     builtins = subprocess.check_output([env["CC"], "--print-libgcc-file-name"], text=True).strip()
     env["LIBS"] = f"-ldl {builtins}"
     env["LDFLAGS"] += " -Wl,--no-undefined"
-    run([sources["aria2"] / "configure", f"--host={triple}", f"--prefix={prefix}",
+    # Patch a per-ABI source copy; never mutate the checksum-verified extraction.
+    aria_source = work / "aria2-source"
+    shutil.copytree(sources["aria2"], aria_source)
+    run(["patch", "-p1", "--batch", "--forward", "-i", PATCHES / "http-fd.patch"], aria_source, env)
+    for header in PATCHES.glob("*.h"):
+        shutil.copyfile(header, aria_source / "src" / header.name)
+    run([aria_source / "configure", f"--host={triple}", f"--prefix={prefix}",
          "--enable-libaria2", "--enable-shared", "--disable-static", "--disable-nls",
          "--disable-dependency-tracking", "--enable-bittorrent", "--enable-metalink",
          "--with-openssl", "--without-gnutls", "--without-libgcrypt", "--without-libgmp",
@@ -135,6 +143,7 @@ def build(sdk, abi, root, sources, versions, jobs):
     # must match the APK entry, including libaria2's DT_NEEDED from JNI.
     run(["make", f"-j{jobs}", "AM_LDFLAGS=-avoid-version"], directory, env)
     run(["make", "install", "AM_LDFLAGS=-avoid-version"], directory, env)
+    shutil.copyfile(PATCHES / "aria_fd.h", prefix / "include/aria2/aria_fd.h")
     licenses = prefix / "licenses"
     licenses.mkdir()
     for name, source in sources.items():
@@ -153,7 +162,7 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    for tool in ("make", "perl", "pkg-config", "gcc"):
+    for tool in ("make", "perl", "pkg-config", "gcc", "patch"):
         if not shutil.which(tool):
             parser.error(f"Missing host dependency: {tool}; see native/README.md")
     versions = tomllib.loads(CATALOG.read_text())["versions"]

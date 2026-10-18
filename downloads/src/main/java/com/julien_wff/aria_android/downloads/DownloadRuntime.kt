@@ -74,6 +74,7 @@ object DownloadRuntime {
             requireExplicitResume = requireResume)
 
         init {
+            scope.launch(Dispatchers.IO) { DownloadsDestination(context).cleanupLegacyFolders() }
             // Render transitions immediately, coalesce high-frequency native progress to 1 Hz.
             scope.launch {
                 var last: List<DownloadTask> = emptyList()

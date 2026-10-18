@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--serial", help="ADB device serial (required when several devices are attached)")
+    parser.add_argument("--skip-install", action="store_true", help="Reuse already-installed matching app and test APKs")
     parser.add_argument("--stop-mode", choices=("sigkill", "force-stop", "task-manager"), default="sigkill",
                         help="How to interrupt Aria only; user stops must require explicit Resume")
     options = parser.parse_args()
@@ -62,10 +63,14 @@ def main():
             raise RuntimeError(f"ADB {arguments[0]} failed ({result.returncode}): {result.stdout}{result.stderr}")
         return result.stdout
 
+    user = run("shell", "am", "get-current-user").strip()
+    if not user.isdigit():
+        raise RuntimeError("Unable to identify the active Android user")
     root = Path(__file__).resolve().parents[1]
-    for apk in ("app/build/outputs/apk/debug/app-debug.apk",
-                "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"):
-        print(run("install", "-r", "-t", str(root / apk)), end="", flush=True)
+    if not options.skip_install:
+        for apk in ("app/build/outputs/apk/debug/app-debug.apk",
+                    "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"):
+            print(run("install", "-r", "-t", str(root / apk)), end="", flush=True)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_port
@@ -75,7 +80,7 @@ def main():
         run("shell", "input", "keyevent", "KEYCODE_WAKEUP")
         run("shell", "wm", "dismiss-keyguard")
         def instrument(phase, method):
-            return ["shell", "am", "instrument", "-w", "-e", "class", f"{test_class}#{method}",
+            return ["shell", "am", "instrument", "-w", "--user", user, "-e", "class", f"{test_class}#{method}",
                     "-e", "recoveryPhase", phase, "-e", "recoveryUrl", f"http://127.0.0.1:{port}/file",
                     "-e", "recoveryName", name, "-e", "expectUserStop", str(options.stop_mode != "sigkill").lower(),
                     "-e", "recoveryHash", hashlib.sha256(payload).hexdigest(),
