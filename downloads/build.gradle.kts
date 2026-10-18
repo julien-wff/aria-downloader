@@ -5,7 +5,8 @@ plugins {
 
 android {
     namespace = "com.julien_wff.aria_android.downloads"
-    compileSdk { version = release(37) }
+    compileSdk { version = release(libs.versions.androidSdk.get().toInt()) }
+    buildToolsVersion = libs.versions.buildTools.get()
     defaultConfig {
         minSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

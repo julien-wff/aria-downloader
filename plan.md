@@ -313,7 +313,15 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 6 (advanced protocols) is the current implementation milestone.
+Milestone 7 (release) is the current implementation milestone, scoped by the user
+to release-only GitHub Actions automation. Publishing a GitHub Release builds and
+verifies its tagged commit, signs a universal APK and attaches it with SHA-256
+checksums. Use vX.Y.Z versioning and a persistent release key supplied through
+repository secrets. No Play Store integration or PR/push workflow. Broader
+licensing/source-distribution work remains separately tracked. See docs/releases.md
+for setup and PROGRESS.md for actual verification status.
+
+Milestone 6 (advanced protocols) is implemented and retained.
 The user authorized torrent/magnet links, torrent/Metalink web URLs and shared
 metadata files, without a file picker. Payload transfers require metadata review
 and explicit file selection. Metalink supports HTTP/HTTPS mirrors and supplied

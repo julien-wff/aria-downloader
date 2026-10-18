@@ -1,5 +1,84 @@
 # Development progress
 
+## 2026-10-18 - GitHub Release APK automation
+
+Status: release automation implemented and locally verified. The first hosted
+release run and production signing setup remain pending; no release was created
+and no repository secrets were changed. Broader licensing/source-distribution
+work remains separately tracked.
+
+### Implemented
+
+- Added a published-release-only workflow that checks out the tag, installs pinned
+  Android/native tooling, caches build inputs, runs build/lint/JVM checks, signs a
+  universal release APK and attaches it plus SHA256SUMS using the workflow token.
+  Actions are pinned to commit SHAs. The release job explicitly requests
+  contents: write while retaining the repository's read-only default.
+- Added canonical vX.Y.Z validation and monotonic version-code derivation, paired
+  Gradle version overrides, environment-based signing and a release-signing guard.
+  Centralized SDK, build tools and JDK versions in the version catalog. Debug
+  builds retain their existing defaults without signing credentials.
+- Added temporary, restricted signing-file handling and guaranteed CI cleanup;
+  configuration caches are disabled during CI builds. Packaging checks APK
+  signatures, package/version, non-debuggable status, both ABIs, native dependencies
+  and 16 KiB ELF/ZIP alignment before generating assets. Missing signing inputs,
+  failed checks or invalid tags prevent publication. Reports survive failed runs.
+- Documented key generation/backup, four gh-managed repository secrets, publishing,
+  reruns and asset verification in [docs/releases.md](docs/releases.md). Updated
+  current milestone instructions and README; no Play Store or PR/push CI was added.
+
+### Verification
+
+- `gh` confirmed julien-wff/aria-downloader is public, uses main, has Actions
+  enabled, defaults workflow tokens to read-only, and has no releases, workflows
+  or repository secrets yet. Network-restricted gh calls initially failed; the
+  same read-only checks succeeded outside the network sandbox.
+- Build, lint and all 86 JVM tests passed (11 app, 58 downloads, 17 aria2):
+
+  ```sh
+  ./gradlew --no-configuration-cache assembleDebug lintDebug \
+    :app:testDebugUnitTest :downloads:testDebugUnitTest :aria2:testDebugUnitTest
+  ```
+
+  The initial sandbox attempt was blocked by the read-only Gradle cache; rerunning
+  with cache/SDK access succeeded. After the final build changes, the same tasks
+  passed again together with :app:assembleRelease, --no-daemon and the version
+  properties below, using an automatically removed disposable PKCS12 test key:
+
+  ```sh
+  ./gradlew --no-daemon --no-configuration-cache assembleDebug lintDebug \
+    :app:testDebugUnitTest :downloads:testDebugUnitTest :aria2:testDebugUnitTest \
+    :app:assembleRelease -PreleaseVersionName=1.2.3 -PreleaseVersionCode=1002003
+  ```
+
+- `./gradlew --no-configuration-cache :app:assembleRelease` without signing inputs
+  failed as expected at validateReleaseSigning and listed only missing variable
+  names. No unsigned release is accepted by this build path.
+- All four release-tool tests passed via
+  `python3 -m unittest discover -s tools/tests -v`. Coverage includes version
+  boundaries/order, invalid tags, absent/malformed secrets, private file permissions
+  and refusing to overwrite an existing key.
+- actionlint 1.7.12 with ShellCheck 0.11.0 passed the final workflow. actionlint's
+  downloaded archive matched its upstream SHA-256 checksum. `git diff --check`
+  passed.
+- The disposable-key release APK passed signature and manifest/version checks,
+  both ABI/dependency checks, ELF/ZIP alignment and SHA256SUMS verification:
+
+  ```sh
+  python3 tools/release.py package --sdk "$ANDROID_HOME" --tag v1.2.3 \
+    --apk app/build/outputs/apk/release/app-release.apk
+  (cd dist && sha256sum --check SHA256SUMS)
+  ```
+
+  Packaging rejected the debug APK and a release APK with a mismatched tag before
+  writing assets. The SDK's apksigner shell launcher initially failed on NixOS
+  because /bin/bash is absent; invoking its bundled Java JAR fixed verification
+  without changing SDK files. An initial checksum command used the checkout
+  directory rather than dist; the corrected command above passed.
+- No device tests or release installation were run for these build/CI changes.
+  Production-key signing and actual GitHub asset upload remain unverified until
+  the changes are pushed, signing secrets are configured and a release is published.
+
 ## 2026-10-17 - Milestone 6 advanced protocols
 
 Status: milestone 6 implemented and verified on API 37. All 39 default device

@@ -1,4 +1,7 @@
 [versions]
+androidSdk = "37"
+buildTools = "37.0.0"
+jdk = "25"
 datastore = "1.2.1"
 room = "2.8.4"
 ksp = "2.3.6"

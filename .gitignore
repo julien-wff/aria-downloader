@@ -16,3 +16,7 @@
 local.properties
 .code
 .idea
+*.jks
+*.keystore
+/dist/
+__pycache__/

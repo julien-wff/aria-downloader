@@ -40,7 +40,7 @@ def main():
             for library in ("libaria2.so", "libaria_jni.so", "libc++_shared.so"):
                 if f"lib/{abi}/{library}" not in libraries:
                     raise RuntimeError(f"Missing {abi}/{library}")
-    zipalign = args.sdk / "build-tools/37.0.0/zipalign"
+    zipalign = args.sdk / "build-tools" / versions["buildTools"] / "zipalign"
     subprocess.run([zipalign, "-c", "-P", "16", "4", args.apk], check=True)
     print("PASS APK 16 KiB ZIP alignment")
 

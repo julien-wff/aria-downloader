@@ -4,7 +4,8 @@ plugins {
 
 android {
     namespace = "com.julien_wff.aria_android.aria2"
-    compileSdk { version = release(37) }
+    compileSdk { version = release(libs.versions.androidSdk.get().toInt()) }
+    buildToolsVersion = libs.versions.buildTools.get()
     ndkVersion = libs.versions.ndk.get()
     defaultConfig {
         minSdk = 35

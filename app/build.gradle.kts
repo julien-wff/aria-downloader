@@ -3,27 +3,52 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+val releaseVersionName = providers.gradleProperty("releaseVersionName")
+val releaseVersionCode = providers.gradleProperty("releaseVersionCode")
+require(releaseVersionName.isPresent == releaseVersionCode.isPresent) {
+    "Supply releaseVersionName and releaseVersionCode together"
+}
+val signingVariables = listOf(
+    "ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD",
+)
+val signingValues = signingVariables.associateWith { providers.environmentVariable(it).orNull }
+val missingSigningVariables = signingVariables.filter { signingValues[it].isNullOrBlank() }
+
 android {
     namespace = "com.julien_wff.aria_android"
     ndkVersion = libs.versions.ndk.get()
+    buildToolsVersion = libs.versions.buildTools.get()
     compileSdk {
-        version = release(37)
+        version = release(libs.versions.androidSdk.get().toInt())
     }
 
     defaultConfig {
         applicationId = "com.julien_wff.aria_android"
         minSdk = 35
-        targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = libs.versions.androidSdk.get().toInt()
+        versionCode = releaseVersionCode.orNull?.toInt()?.also {
+            require(it in 1..2_100_000_000) { "releaseVersionCode is outside Android's supported range" }
+        } ?: 1
+        versionName = releaseVersionName.orNull ?: "1.0"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         testInstrumentationRunnerArguments["notAnnotation"] = "com.julien_wff.aria_android.HostRecovery"
     }
 
+    signingConfigs {
+        if (missingSigningVariables.isEmpty()) {
+            create("githubRelease") {
+                storeFile = file(signingValues.getValue("ANDROID_KEYSTORE_PATH")!!)
+                storePassword = signingValues.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingValues.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingValues.getValue("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("githubRelease")
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
@@ -35,6 +60,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true }
+}
+
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
+    doLast {
+        check(missingSigningVariables.isEmpty()) {
+            "Release signing requires: ${missingSigningVariables.joinToString()}. See docs/releases.md"
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseSigning)
 }
 
 dependencies {

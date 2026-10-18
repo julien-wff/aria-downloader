@@ -66,6 +66,13 @@ native builds need NDK `30.0.16248370`, CMake
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. See
 the [native development guide](aria2/native/README.md) for host tools and native build details.
 
+## GitHub Releases
+
+Publishing a GitHub Release with a `vX.Y.Z` tag builds, tests and signs a universal
+APK, then attaches it and SHA-256 checksums to that release. Configure the four
+signing secrets first; see [release setup and verification](docs/releases.md).
+The pipeline runs only for published releases. It has no Play Store integration.
+
 ## Development
 
 Run the standard build and lint checks with:

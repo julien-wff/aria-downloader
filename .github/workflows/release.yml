@@ -1,0 +1,109 @@
+name: Release APK
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-apk-${{ github.event.release.id }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Validate tag and read tool versions
+        id: release
+        run: |
+          chmod +x gradlew
+          python3 tools/release.py version "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          python3 tools/release.py config >> "$GITHUB_OUTPUT"
+          python3 -m unittest discover -s tools/tests -v
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.release.outputs.jdk }}
+
+      - name: Install native host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make perl pkg-config gcc g++ autoconf automake libtool gettext gperf patch tar unzip
+
+      - name: Install pinned Android tools
+        run: python3 tools/release.py install-sdk --sdk "$ANDROID_HOME"
+
+      - name: Restore build caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            aria2/build/native/archives
+            aria2/build/native/install
+          key: release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.gradle.kts', 'gradle/**', 'aria2/native/build.py', 'aria2/native/sources.json', 'aria2/src/main/cpp/**') }}
+
+      - name: Build, lint and run JVM tests
+        run: |
+          ./gradlew --no-daemon --no-configuration-cache assembleDebug lintDebug \
+            :app:testDebugUnitTest :downloads:testDebugUnitTest :aria2:testDebugUnitTest
+
+      - name: Assemble signed release
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.release.outputs.version_name }}
+          VERSION_CODE: ${{ steps.release.outputs.version_code }}
+        run: |
+          export ANDROID_KEYSTORE_PATH
+          ANDROID_KEYSTORE_PATH=$(python3 tools/release.py prepare-signing --directory "$RUNNER_TEMP/aria-signing")
+          ./gradlew --no-daemon --no-configuration-cache :app:assembleRelease \
+            -PreleaseVersionName="$VERSION_NAME" -PreleaseVersionCode="$VERSION_CODE"
+
+      - name: Verify and package APK
+        run: |
+          python3 tools/release.py package --sdk "$ANDROID_HOME" --tag "$RELEASE_TAG" \
+            --apk app/build/outputs/apk/release/app-release.apk
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "dist/aria-downloader-$RELEASE_TAG.apk" dist/SHA256SUMS --clobber
+
+      - name: Remove signing material
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/aria-signing"
+
+      - name: Retain verification reports on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-verification-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            downloads/build/reports/
+            downloads/build/test-results/
+            aria2/build/reports/
+            aria2/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14

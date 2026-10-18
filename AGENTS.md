@@ -17,7 +17,12 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 6 is current: torrents, magnets and HTTP/HTTPS-backed Metalink, with
+Milestone 7 is current, scoped to GitHub Release automation: build and verify the
+tagged commit, sign a universal APK with a persistent release key, and attach the
+APK/checksums to the published release. No Play Store, PR or push pipeline.
+Follow docs/releases.md; never commit signing material. Broader licensing/source
+distribution remains separately tracked. Retain milestone 6's torrents, magnets
+and HTTP/HTTPS-backed Metalink, with
 metadata review, explicit file selection and restartable per-file public export.
 The user explicitly authorized implementing the milestone 6 plan. Support links and
 shared metadata files without a file picker. Group multi-file exports into task
