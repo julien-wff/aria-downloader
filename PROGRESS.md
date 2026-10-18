@@ -1,6 +1,24 @@
 # Development progress
 
-## 2026-10-18 - Initial hosted release SDK correction
+## 2026-10-18 - Initial GitHub release verified
+
+- Published [v1.0.0](https://github.com/julien-wff/aria-downloader/releases/tag/v1.0.0)
+  at commit 1190834c76156cab1f364826df5144c36d679cc2. Hosted
+  [Actions run 39118003248](https://github.com/julien-wff/aria-downloader/actions/runs/39118003248)
+  succeeded: five release-tool tests, debug build/lint/module JVM tests, signed
+  release assembly, APK verification, asset upload, signing cleanup and cache save.
+  The cold debug/check build took 11m 26s; signed release assembly took 2m 26s.
+- Downloaded both published assets with gh into a fresh temporary directory.
+  SHA256SUMS matched the APK and GitHub's asset digest. Re-ran the release packaging
+  verifier against the downloaded APK: valid APK signature, expected package and
+  version 1.0.0 / 1000000, non-debuggable manifest, both supported ABIs, packaged
+  native dependencies and 16 KiB ELF/ZIP alignment all passed.
+- Public APK: aria-downloader-v1.0.0.apk, 26,814,740 bytes; SHA-256:
+  `375cba6772b1d85eee4593b23f84855d1383834fd9eb8e287efcd736de6a3256`.
+  Signing-certificate SHA-256:
+  `93b0cbd0375de39f1b27226c51bf7e024e4b901f1d8bde24c042a42c8cbcc24e`.
+  Production signing used the user's repository secrets; no secret values were
+  read or changed locally. No device install/runtime smoke test was performed.
 
 - The first v1.0.0 release triggered Actions run 39117580531. It failed before
   build/signing because SDK Manager could not find platforms;android-37. No APK
@@ -9,8 +27,8 @@
 - Added a separately pinned androidPlatform suffix (37.0), preserving API level
   37 for Gradle, and a regression for the published SDK package identifier. All
   five release-tool tests and `./gradlew --no-configuration-cache assembleDebug
-  lintDebug` passed. The empty initial release is being retried at
-  the corrected commit; hosted verification is recorded below once completed.
+  lintDebug` passed. Pushed the correction and recreated the empty initial release
+  at the fixed commit; the successful hosted run is recorded above.
 
 ## 2026-10-18 - GitHub Release APK automation
 
