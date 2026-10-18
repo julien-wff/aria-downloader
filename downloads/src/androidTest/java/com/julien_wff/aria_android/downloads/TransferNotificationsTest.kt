@@ -73,6 +73,14 @@ class TransferNotificationsTest {
         }
     }
 
+    @Test fun etaUsesReadableHoursAndDays() {
+        for ((seconds, expected) in listOf(4320L to "1 hr 12 min", 183600L to "2 days 3 hr")) {
+            val notification = notifications.build(DownloadState(status = DownloadStatus.DOWNLOADING,
+                completedBytes = 0, totalBytes = seconds * 100, bytesPerSecond = 100), "task")
+            assertTrue(notification.extras.getString(Notification.EXTRA_TEXT).orEmpty().contains("$expected left"))
+        }
+    }
+
     @Test fun unknownLengthIsIndeterminateAndOmitsEta() {
         val notification = notifications.build(DownloadState(status = DownloadStatus.DOWNLOADING,
             completedBytes = 1024, bytesPerSecond = 128), "task")

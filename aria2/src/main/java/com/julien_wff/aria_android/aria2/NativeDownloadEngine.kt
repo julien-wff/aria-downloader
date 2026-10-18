@@ -383,6 +383,8 @@ class NativeDownloadEngine internal constructor(
         }
     }
 
+    private val pieceReads = mutableMapOf<EngineTaskId, Long>()
+
     private fun refresh() {
         tasks.values.filter { it.snapshot.state in runnableStates + EngineTaskState.PAUSED }.forEach { task ->
             if (task.preparing) return@forEach
@@ -412,6 +414,14 @@ class NativeDownloadEngine internal constructor(
                         errorCode = data[4].toInt().takeIf { nativeState == EngineTaskState.FAILED }, files = task.files)
                     return@forEach
                 }
+                val now = System.nanoTime()
+                var pieces = task.snapshot.pieces
+                if (now - (pieceReads[task.id] ?: 0L) >= 1_000_000_000L || nativeState == EngineTaskState.COMPLETED) {
+                    pieces = runCatching { decodePieces(native.pieces(task.nativeId)) }.getOrNull() ?: pieces
+                    pieceReads[task.id] = now
+                    if (task.request.kind == EngineSourceKind.METALINK) pieces = pieces?.copy(
+                        fileName = task.files.filter { it.selected }.getOrNull(task.childIndex)?.path)
+                }
                 if (task.request.kind == EngineSourceKind.METALINK) {
                     val selected = task.files.filter { it.selected }
                     val current = selected[task.childIndex]
@@ -419,6 +429,8 @@ class NativeDownloadEngine internal constructor(
                         completedBytes = data[1], length = if (it.length == 0L) data[2] else it.length) else it }
                     if (nativeState == EngineTaskState.COMPLETED && task.childIndex < selected.lastIndex) {
                         task.childIndex++
+                        task.snapshot = task.snapshot.copy(pieces = null)
+                        pieceReads.remove(task.id)
                         addMetalinkChild(task)
                         return@forEach
                     }
@@ -437,7 +449,8 @@ class NativeDownloadEngine internal constructor(
                         if (data[4] == 8L) "Server rejected the resume request; partial data is preserved"
                         else "Download failed (aria2 code ${data[4]})"
                     } else null,
-                    task.files)
+                    task.files, pieces,
+                    if (task.request.kind == EngineSourceKind.METALINK) selected.getOrNull(task.childIndex)?.path else null)
             } catch (_: Exception) {
                 runCatching { native.remove(task.nativeId) }
                 task.snapshot = EngineTaskSnapshot(task.id, EngineTaskState.FAILED,

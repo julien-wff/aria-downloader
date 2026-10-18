@@ -115,6 +115,7 @@ data class DownloadTask(
     val speedLimit: Long,
     val protocol: DownloadProtocol = DownloadProtocol.HTTP,
     val files: List<DownloadFile> = emptyList(),
+    val insights: TransferInsights = TransferInsights(),
 ) {
     val isHistory get() = state.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED)
 }
@@ -136,6 +137,7 @@ class DownloadController internal constructor(
     private val registered = mutableMapOf<String, EngineTaskId>()
     private val active = mutableSetOf<String>()
     private val exporting = mutableMapOf<String, Job>()
+    private val insightHistory = InsightHistory()
     private var retryWake: Job? = null
     private var boundExecution: ExecutionLease? = null
     private val lastWrites = mutableMapOf<String, Long>()
@@ -207,6 +209,12 @@ class DownloadController internal constructor(
                         for (id in active.toList()) {
                             val task = snapshot.tasks.find { it.id == registered[id] } ?: continue
                             val current = records.getValue(id)
+                            val overview = task.pieces?.let { p -> PieceOverview(p.count, p.pieceBytes,
+                                p.cells.map { PieceOverviewCell(it.completed, it.total) }, p.fileName) }
+                            insightHistory.update(id, System.nanoTime() / 1_000_000,
+                                if (task.state == EngineTaskState.DOWNLOADING) task.bytesPerSecond else null, overview ?: insightHistory.get(id).pieces?.takeIf {
+                                    task.currentFileName == null || it.fileName == task.currentFileName
+                                })
                             if (current.desired != DesiredState.RUNNING) continue
                             val status = when (task.state) {
                                 EngineTaskState.DOWNLOADING -> DownloadStatus.DOWNLOADING
@@ -278,6 +286,9 @@ class DownloadController internal constructor(
         engineCode = engineCode, stopReason = stopReason)
 
     private fun publish() {
+        records.values.filter { views[it.id]?.status != DownloadStatus.DOWNLOADING }.forEach {
+            insightHistory.stop(it.id, System.nanoTime() / 1_000_000)
+        }
         mutableTasks.value = records.values.sortedByDescending { it.createdAt }.map { record ->
             val source = runCatching {
                 if (record.protocol == DownloadProtocol.MAGNET) return@runCatching "Magnet link"
@@ -285,7 +296,7 @@ class DownloadController internal constructor(
                 val uri = java.net.URI(record.url)
                 java.net.URI(uri.scheme, null, uri.host, uri.port, uri.path, null, null).toString()
             }.getOrDefault("Source unavailable")
-            DownloadTask(record.id, source, views.getValue(record.id), record.createdAt, record.connections, record.speedLimit, record.protocol, record.files)
+            DownloadTask(record.id, source, views.getValue(record.id), record.createdAt, record.connections, record.speedLimit, record.protocol, record.files, insightHistory.get(record.id))
         }
         mutableState.value = mutableTasks.value.firstOrNull()?.state ?: DownloadState()
     }
@@ -396,6 +407,7 @@ class DownloadController internal constructor(
         check(views.getValue(id).status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED))
         check(id !in exporting)
         store.delete(id)
+        insightHistory.remove(id)
         records.remove(id); views.remove(id); registered.remove(id)
         publish()
     }
@@ -489,7 +501,7 @@ class DownloadController internal constructor(
         return current.copy(status = if (retry) DownloadStatus.WAITING else DownloadStatus.FAILED,
             retryCount = attempt, retryAt = if (retry) nowMillis() + delay else 0,
             failureCategory = category, engineCode = code,
-            failure = if (retry) "Temporary transfer failure. Automatic retry $attempt/3 in ${delay / 1000} seconds."
+            failure = if (retry) "Temporary transfer failure. Automatic retry $attempt/3 in ${formatTransferDuration(delay / 1000)}."
                 else failureAdvice(code) + if (current.retryCount >= 3) " Automatic retries exhausted." else "")
     }
 

@@ -107,7 +107,11 @@ class NativeEngineTest {
             FixtureServer("valid").use { server ->
                 engine.start()
                 val id = engine.add(EngineRequest(server.url("/file"), "résultat-🎵.bin"))
-                engine.await(id, EngineTaskState.COMPLETED)
+                val completed = engine.await(id, EngineTaskState.COMPLETED)
+                val pieces = requireNotNull(completed.pieces)
+                assertTrue(pieces.cells.size in 1..256)
+                assertEquals(pieces.count, pieces.cells.sumOf { it.total })
+                assertEquals(pieces.count, pieces.cells.sumOf { it.completed })
                 assertArrayEquals(server.hash(), File(root, "${id.value}/résultat-🎵.bin").sha256())
                 assertFalse(File(root, "${id.value}/résultat-🎵.bin.aria2").exists())
             }
@@ -158,9 +162,12 @@ class NativeEngineTest {
                     val id = engine.add(EngineRequest(server.url(path), options = EngineOptions(1)))
                     withTimeout(30_000) {
                         engine.snapshots.first { it.tasks.any { task -> task.id == id && task.completedBytes > 0 &&
-                            task.state == EngineTaskState.DOWNLOADING } }
+                            task.state == EngineTaskState.DOWNLOADING && task.pieces != null } }
                     }
+                    val beforePause = engine.snapshots.value.tasks.single().pieces
+                    assertNotNull(beforePause)
                     engine.pause(id)
+                    assertEquals(beforePause, engine.snapshots.value.tasks.single().pieces)
                     assertEquals(EngineTaskState.PAUSED, engine.snapshots.value.tasks.single().state)
                     assertTrue(File(root, "${id.value}/download.aria2").isFile)
                     val staged = File(root, "${id.value}/download")

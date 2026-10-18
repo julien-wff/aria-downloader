@@ -91,3 +91,6 @@ Recovery scenarios and the device acceptance matrix are in [docs/reliability.md]
 Protocol behavior and per-file publication are in [docs/advanced-protocols.md](docs/advanced-protocols.md).
 The project roadmap and milestone status are in [plan.md](plan.md) and
 [PROGRESS.md](PROGRESS.md).
+
+Transfer graphs, piece-map semantics, and duration formatting are documented in
+[transfer insights](docs/transfer-insights.md).

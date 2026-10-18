@@ -420,6 +420,7 @@ private fun TaskDetails(task: DownloadTask, model: DownloadsViewModel, actions: 
         Text(task.state.fileName, style = MaterialTheme.typography.headlineMedium)
         Section("Transfer", R.drawable.ic_download) { TaskProgress(task.state); actions(task) }
         if (task.files.isNotEmpty()) FileReview(task, model)
+        TransferInsightsPanel(task)
         Section("Source", R.drawable.ic_link) { SelectionContainer { Text(task.source, style = MaterialTheme.typography.bodyMedium) } }
         Section("Configuration", R.drawable.ic_tune) {
             Text("${task.connections} connections per server")
@@ -452,8 +453,9 @@ private fun TaskProgress(state: DownloadState) {
     val size = Formatter.formatShortFileSize(context, state.completedBytes)
     val total = if (state.totalBytes > 0) " / ${Formatter.formatShortFileSize(context, state.totalBytes)}" else ""
     val speed = if (state.bytesPerSecond > 0) " · ${Formatter.formatShortFileSize(context, state.bytesPerSecond)}/s" else ""
-    val eta = if (state.totalBytes > state.completedBytes && state.bytesPerSecond > 0) " · ${(state.totalBytes - state.completedBytes) / state.bytesPerSecond}s left" else ""
-    Text(size + total + speed + eta, style = MaterialTheme.typography.bodySmall)
+    val eta = transferEtaText(state)?.let { " · $it left" }.orEmpty()
+    Text(size + total + speed + eta, style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.semantics { stateDescription = transferEtaText(state, spoken = true)?.let { "$it remaining" }.orEmpty() })
     state.message?.let { Text(it, color = if (state.status in setOf(DownloadStatus.FAILED, DownloadStatus.SAVE_FAILED)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
 }
 

@@ -69,6 +69,24 @@ class TransferReliabilityTest {
         fun state(id: String) = controller.tasks.value.first { it.id == id }.state
     }
 
+    @Test fun insightsSurvivePauseWithoutImplyingPublication() = runTest {
+        val f = Fixture(this)
+        val id = f.add(); f.authorize(); runCurrent()
+        val nativeId = EngineTaskId(f.rows.getValue(id).taskId!!)
+        val map = PieceProgress(8, 1024, listOf(PieceCell(3, 8)))
+        f.engine.snapshots.value = EngineSnapshot(true, listOf(EngineTaskSnapshot(nativeId,
+            EngineTaskState.DOWNLOADING, completedBytes = 3072, totalBytes = 8192,
+            bytesPerSecond = 1024, pieces = map)))
+        runCurrent()
+        val insights = f.controller.tasks.value.single().insights
+        assertEquals(3L, insights.pieces!!.cells.single().completed)
+        assertTrue(insights.samples.isNotEmpty())
+        f.controller.pauseTask(id); runCurrent()
+        assertEquals(insights.pieces, f.controller.tasks.value.single().insights.pieces)
+        assertEquals(DownloadStatus.PAUSED, f.state(id).status)
+        assertNull(f.rows.getValue(id).publishedUri)
+    }
+
     @Test fun retriesUseExactBackoffPreserveIdentityAndStopAfterThreeAttempts() = runTest {
         val f = Fixture(this)
         val id = f.add(); val nativeId = f.rows.getValue(id).taskId

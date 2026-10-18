@@ -98,6 +98,16 @@ data class EngineRequest(
 
 enum class EngineTaskState { DOWNLOADING, QUEUED, PAUSED, COMPLETED, FAILED, REMOVED, METADATA, AWAITING_SELECTION }
 
+data class PieceCell(val completed: Long, val total: Long)
+data class PieceProgress(val count: Long, val pieceBytes: Long, val cells: List<PieceCell>, val fileName: String? = null)
+
+internal fun decodePieces(data: LongArray): PieceProgress? {
+    if (data.size < 4 || data.size > 514 || data.size % 2 != 0 || data[0] !in 1..Int.MAX_VALUE.toLong() || data[1] <= 0) return null
+    val cells = (2 until data.size step 2).map { PieceCell(data[it], data[it + 1]) }
+    if (cells.any { it.total !in 1..data[0] || it.completed !in 0..it.total } || cells.sumOf { it.total } != data[0]) return null
+    return PieceProgress(data[0], data[1], cells)
+}
+
 data class EngineTaskSnapshot(
     val id: EngineTaskId,
     val state: EngineTaskState,
@@ -107,6 +117,9 @@ data class EngineTaskSnapshot(
     val errorCode: Int? = null,
     val errorMessage: String? = null,
     val files: List<EngineFile> = emptyList(),
+    val pieces: PieceProgress? = null,
+    /** Active Metalink child, even before its piece metadata is available. */
+    val currentFileName: String? = null,
 )
 
 data class EngineSnapshot(

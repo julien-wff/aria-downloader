@@ -17,7 +17,13 @@
 - Keep local SDK paths, credentials and secrets out of shared configuration.
 - Update documentation when setup or architecture changes.
 
-Milestone 7 is current, scoped to GitHub Release automation: build and verify the
+Milestone 8 is current, scoped to transfer insights: a two-minute live-session speed
+graph, a bounded actual-piece completion matrix, clearer state explanations, and
+shared readable duration formatting in the app and notifications. Follow
+docs/transfer-insights.md. Keep insight telemetry memory-only; piece completion
+never implies successful public saving.
+
+Milestone 7 is complete, scoped to GitHub Release automation: build and verify the
 tagged commit, sign a universal APK with a persistent release key, and attach the
 APK/checksums to the published release. No Play Store, PR or push pipeline.
 Follow docs/releases.md; never commit signing material. Broader licensing/source

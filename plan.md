@@ -313,7 +313,14 @@ assets. [GitHub](https://github.com/aria2/aria2?utm_source=chatgpt.com)
 
 **10. Implementation milestones and acceptance gates**
 
-Milestone 7 (release) is the current implementation milestone, scoped by the user
+Milestone 8 (transfer insights) is the current implementation milestone, authorized
+by the user after completion of release automation. Add a live two-minute speed
+graph, a compact actual-piece completion matrix, clearer state explanations and
+consistent readable durations in the app and notifications. Insights are bounded,
+memory-only, and never change execution authorization or publication semantics.
+See docs/transfer-insights.md and PROGRESS.md for behavior and verification.
+
+Milestone 7 (release) is complete, scoped by the user
 to release-only GitHub Actions automation. Publishing a GitHub Release builds and
 verifies its tagged commit, signs a universal APK and attaches it with SHA-256
 checksums. Use vX.Y.Z versioning and a persistent release key supplied through

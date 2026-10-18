@@ -6,6 +6,9 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
+#include <algorithm>
+#include "piece_overview.h"
 
 namespace {
 aria2::Session* session = nullptr;
@@ -215,6 +218,20 @@ extern "C" JNIEXPORT jlongArray JNICALL JNI_METHOD(snapshot)(JNIEnv* env, jobjec
             handle->getTotalLength(), handle->getDownloadSpeed(), handle->getErrorCode()};
         result = env->NewLongArray(5);
         if (result) env->SetLongArrayRegion(result, 0, 5, data);
+    });
+    return result;
+}
+// Bounded overview; raw bitfields never cross JNI.
+extern "C" JNIEXPORT jlongArray JNICALL JNI_METHOD(pieces)(JNIEnv* env, jobject, jstring id) {
+    jlongArray result = nullptr;
+    guarded(env, [&] {
+        requireSession();
+        std::unique_ptr<aria2::DownloadHandle, decltype(&aria2::deleteDownloadHandle)> handle(
+            aria2::getDownloadHandle(session, aria2::hexToGid(text(env, id))), aria2::deleteDownloadHandle);
+        const auto overview = handle ? pieceOverview(handle->getBitfield(), handle->getNumPieces(), handle->getPieceLength()) : std::vector<int64_t>{};
+        const std::vector<jlong> data(overview.begin(), overview.end());
+        result = env->NewLongArray(static_cast<jsize>(data.size()));
+        if (result && !data.empty()) env->SetLongArrayRegion(result, 0, static_cast<jsize>(data.size()), data.data());
     });
     return result;
 }

@@ -1,5 +1,42 @@
 # Development progress
 
+## 2026-10-18 - Milestone 8: transfer insights
+
+Implemented live-session transfer insights and consistent duration formatting.
+Download details now include a two-minute speed graph with latest/average/peak
+rates, interruption gaps, state explanations, a retry countdown, and an accessible
+piece-completion matrix. File review remains above insights so metadata selection
+stays immediately reachable.
+
+The native engine reads the real libaria2 byte-string bitfield and aggregates at
+most 256 cells before JNI. Torrent maps explicitly cover the whole torrent;
+Metalink maps identify and reset for each active file. Optional insight failures
+do not fail transfers. The coordinator keeps bounded telemetry in memory only,
+retains stopped graphs and maps during the session, and leaves Room recovery and
+successful-publication semantics unchanged. ETAs in the app and notifications now
+use seconds, minutes/seconds, hours/minutes, or days/hours, with full spoken units
+in the app. See [transfer insights](docs/transfer-insights.md).
+
+Verification:
+
+- `./gradlew assembleDebug lintDebug :aria2:testDebugUnitTest :downloads:testDebugUnitTest :app:testDebugUnitTest`
+  passed. All 94 JVM tests passed (19 engine, 64 downloads, 11 app).
+- The C++17 host aggregation test passed with `-Wall -Wextra -Werror`; it covers
+  bit order, spare bits, empty/malformed inputs, grouped counts, and 64-bit sizes.
+- Final combined verification passed in 2m 9s:
+  `./gradlew --no-parallel assembleDebug lintDebug :aria2:testDebugUnitTest :downloads:testDebugUnitTest :app:testDebugUnitTest connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.notClass=com.julien_wff.aria_android.aria2.NativeEngineTest#fullLargeFileHash,com.julien_wff.aria_android.ProductUiTest#clipboardPrefillsNewDownloadButNeverOverwritesDraftOrShareIntake'`.
+  On the connected SM-S948B / Android 17 device, 41 checks passed (11 engine,
+  17 downloads, 13 app), including native HTTP pause/resume/completion, torrent
+  selection, Metalink file transitions, notification hour/day ETAs, and the new
+  accessible insight UI at large text size. Existing export, background retry,
+  metadata-selection/recreation, and responsive UI checks also passed.
+- An unfiltered `./gradlew connectedDebugAndroidTest` was attempted. The clipboard
+  test requires an unlocked device and remains unverified (the runner reports its
+  assumption skip in XML as a failure even when the final Gradle task succeeds).
+  The existing opt-in multi-gigabyte file test was excluded from the final run.
+  Initial failures in the new pause test's metadata timing and the file-review
+  layout were corrected before the successful runs above.
+
 ## 2026-10-18 - Initial GitHub release verified
 
 - Published [v1.0.0](https://github.com/julien-wff/aria-downloader/releases/tag/v1.0.0)

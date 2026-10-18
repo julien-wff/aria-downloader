@@ -163,10 +163,7 @@ internal class TransferNotifications(
         val speed = if (state.bytesPerSecond > 0) {
             " · ${Formatter.formatShortFileSize(context, state.bytesPerSecond)}/s"
         } else ""
-        val eta = if (state.totalBytes > state.completedBytes && state.bytesPerSecond > 0) {
-            val seconds = (state.totalBytes - state.completedBytes) / state.bytesPerSecond
-            " · ${if (seconds >= 60) "${seconds / 60} min" else "$seconds s"} left"
-        } else ""
+        val eta = transferEtaText(state)?.let { " · $it left" }.orEmpty()
         return size + speed + eta
     }
 }

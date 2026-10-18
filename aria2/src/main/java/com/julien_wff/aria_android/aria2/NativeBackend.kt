@@ -12,6 +12,7 @@ internal interface NativeBackend {
     fun update(id: String, options: Array<String>)
     fun tick()
     /** status, completed, total, speed, error; all counters cross JNI as longs. */
+    fun pieces(id: String): LongArray = longArrayOf()
     fun snapshot(id: String): LongArray
     fun shutdown()
 }
@@ -30,6 +31,7 @@ internal class JniBackend : NativeBackend {
     external override fun remove(id: String)
     external override fun update(id: String, options: Array<String>)
     external override fun tick()
+    external override fun pieces(id: String): LongArray
     external override fun snapshot(id: String): LongArray
     external override fun shutdown()
 }
