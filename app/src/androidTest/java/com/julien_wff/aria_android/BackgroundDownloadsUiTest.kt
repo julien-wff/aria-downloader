@@ -39,8 +39,10 @@ class BackgroundDownloadsUiTest {
         }
         compose.onNode(hasText("Background activity") and hasText("Restricted")).assertExists()
         compose.onNode(hasText("Battery Saver") and hasText("On")).assertExists()
-        compose.onNodeWithText("Battery settings").performScrollTo().performClick()
-        compose.onNodeWithText("App settings").performScrollTo().performClick()
+        compose.onNodeWithText("Battery settings").performScrollTo().assertIsDisplayed()
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+        compose.onNodeWithText("App settings").performScrollTo().assertIsDisplayed()
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.onNodeWithText("Open Android Settings → Apps → Aria manually.").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertEquals(listOf(true, false), actions) }
         compose.activityRule.scenario.moveToState(Lifecycle.State.STARTED)

@@ -45,6 +45,16 @@ class MainActivity : ComponentActivity() {
 
 data class IncomingDownload(val text: String? = null, val taskId: String? = null, val fileAction: String? = null, val protocol: DownloadProtocol? = null)
 
+internal enum class TaskOperation(val label: String) {
+    PAUSING("Pausing…"), RESUMING("Resuming…"), RETRYING("Retrying…"), DELETING("Deleting…"),
+    SAVING("Saving…"), STARTING("Starting…"), OPENING("Opening…"), SHARING("Sharing…"),
+}
+
+internal enum class DownloadActionKind { RETRIED, DELETED }
+internal data class DownloadActionResult(
+    val sequence: Long, val kind: DownloadActionKind, val taskId: String, val sourceTaskId: String = taskId,
+)
+
 class DownloadsViewModel(application: Application) : AndroidViewModel(application) {
     private val controller = DownloadRuntime.controller(application)
     private val preferences = DownloadRuntime.preferences(application)
@@ -59,6 +69,11 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     val error = mutableError.asStateFlow()
     private val mutableBusy = MutableStateFlow(false)
     val busy = mutableBusy.asStateFlow()
+    private val mutablePendingActions = MutableStateFlow<Map<String, TaskOperation>>(emptyMap())
+    internal val pendingActions = mutablePendingActions.asStateFlow()
+    private val mutableActionResults = MutableStateFlow<List<DownloadActionResult>>(emptyList())
+    internal val actionResults = mutableActionResults.asStateFlow()
+    private var actionSequence = 0L
     val incoming = MutableStateFlow<IncomingDownload?>(null)
     val deletionConsent = MutableStateFlow<android.content.IntentSender?>(null)
     private var pendingDeletion: Pair<String, Boolean>? = null
@@ -110,37 +125,74 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
             onAdded()
         }
     }
-    fun startSelected(id: String, indexes: List<Int>) = act(true) { controller.startSelectedFiles(id, indexes, preferences.read()) }
-    fun pause(id: String) = act { controller.pauseTask(id) }
-    fun resume(id: String) = act { controller.resumeTask(id, preferences.read()) }
-    fun cancel(id: String) = act { controller.cancelTask(id) }
-    fun retry(id: String) = act { controller.retry(id, preferences.read()) }
-    fun retrySaving(id: String) = act { controller.retrySavingTask(id) }
+    fun startSelected(id: String, indexes: List<Int>) = taskAction(id, TaskOperation.STARTING) {
+        controller.startSelectedFiles(id, indexes, preferences.read())
+    }
+    fun pause(id: String) = taskAction(id, TaskOperation.PAUSING) { controller.pauseTask(id) }
+    fun resume(id: String) = taskAction(id, TaskOperation.RESUMING) { controller.resumeTask(id, preferences.read()) }
+    fun retry(id: String) = taskAction(id, TaskOperation.RETRYING) {
+        val added = controller.retry(id, preferences.read())
+        publishAction(DownloadActionKind.RETRIED, added, sourceTaskId = id)
+    }
+    fun retrySaving(id: String) = taskAction(id, TaskOperation.SAVING) { controller.retrySavingTask(id) }
     internal val settingsEditor = SettingsEditor(viewModelScope, preferences::read) { value ->
         preferences.save(value)
         controller.applySettings(value)
     }
-    fun delete(id: String, publicFile: Boolean) = act(true) {
-        val sender = files.delete(id, publicFile)
-        if (sender != null) {
-            pendingDeletion = id to publicFile
-            deletionConsent.value = sender
-        } else pendingDeletion = null
+    fun delete(id: String, publicFile: Boolean) {
+        if (mutablePendingActions.value.values.any { it == TaskOperation.DELETING }) return
+        taskAction(id, TaskOperation.DELETING,
+            failureMessage = "Couldn't finish deleting this download. The entry was kept. Try again.") {
+            val sender = files.delete(id, publicFile)
+            if (sender != null) {
+                pendingDeletion = id to publicFile
+                deletionConsent.value = sender
+            } else {
+                pendingDeletion = null
+                publishAction(DownloadActionKind.DELETED, id)
+            }
+        }
     }
     fun deletionResult(approved: Boolean) {
         deletionConsent.value = null
         val pending = pendingDeletion
         pendingDeletion = null
+        pending?.let { mutablePendingActions.value -= it.first }
         if (approved && pending != null) delete(pending.first, pending.second)
-        else if (!approved) showError("File deletion was declined. The history entry was kept.")
+        else if (!approved) showError("File deletion was declined. The entry was kept.")
     }
-    fun open(task: DownloadTask, share: Boolean, fileIndex: Int? = null, launch: (Intent) -> Unit) = act {
-        val intent = withContext(Dispatchers.IO) { files.intent(task, share, fileIndex) }
-        launch(intent)
+    fun open(task: DownloadTask, share: Boolean, fileIndex: Int? = null, launch: (Intent) -> Unit) =
+        taskAction(task.id, if (share) TaskOperation.SHARING else TaskOperation.OPENING,
+            missingAppMessage = if (share) "No app is available to share these files." else "No app can open this file. Try Share instead.") {
+            val intent = withContext(Dispatchers.IO) { files.intent(task, share, fileIndex) }
+            launch(intent)
+        }
+    private fun publishAction(kind: DownloadActionKind, taskId: String, sourceTaskId: String = taskId) {
+        mutableActionResults.value += DownloadActionResult(++actionSequence, kind, taskId, sourceTaskId)
+    }
+    internal fun acknowledgeAction(sequence: Long) {
+        val result = mutableActionResults.value.find { it.sequence == sequence } ?: return
+        mutableActionResults.value = mutableActionResults.value.filterNot { it.sequence == sequence }
+        mutablePendingActions.value -= result.sourceTaskId
+    }
+    private fun taskAction(id: String, operation: TaskOperation, failureMessage: String? = null,
+        missingAppMessage: String = "No app can open this file. Try Share instead.", action: suspend () -> Unit) {
+        if (id in mutablePendingActions.value) return
+        mutablePendingActions.value += id to operation
+        act(failureMessage = failureMessage, missingAppMessage = missingAppMessage) {
+            try { action() }
+            finally {
+                // Keep fast retries guarded until navigation consumes their result. Android's
+                // consent result likewise completes deletion, including after recreation.
+                if (pendingDeletion?.first != id && mutableActionResults.value.none { it.sourceTaskId == id })
+                    mutablePendingActions.value -= id
+            }
+        }
     }
     fun clearError() { mutableError.value = null }
     fun showError(message: String) { mutableError.value = message }
-    private fun act(exclusive: Boolean = false, action: suspend () -> Unit) {
+    private fun act(exclusive: Boolean = false, failureMessage: String? = null,
+        missingAppMessage: String = "No app can open this file. Try Share instead.", action: suspend () -> Unit) {
         if (exclusive && mutableBusy.value) return
         if (exclusive) mutableBusy.value = true
         mutableError.value = null
@@ -148,9 +200,9 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
             try { action() }
             catch (canceled: CancellationException) { throw canceled }
             catch (error: IllegalArgumentException) { mutableError.value = error.message ?: "Check the URL and filename." }
-            catch (_: android.content.ActivityNotFoundException) { mutableError.value = "No app can open this file. Try Share instead." }
+            catch (_: android.content.ActivityNotFoundException) { mutableError.value = missingAppMessage }
             catch (_: java.io.FileNotFoundException) { mutableError.value = "File is no longer available in Downloads." }
-            catch (_: Exception) { mutableError.value = "Unable to apply this action. Check storage and try again; your saved data is preserved." }
+            catch (_: Exception) { mutableError.value = failureMessage ?: "Unable to apply this action. Check storage and try again; your saved data is preserved." }
             finally { if (exclusive) mutableBusy.value = false }
         }
     }

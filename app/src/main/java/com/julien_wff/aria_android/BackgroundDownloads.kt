@@ -79,7 +79,7 @@ internal fun BackgroundDownloadsSettings(
     openSettings: (Boolean) -> Boolean,
 ) {
     var unavailable by remember { mutableStateOf(false) }
-    Section("Background downloads", R.drawable.ic_download) {
+    Section("Background downloads", R.drawable.ic_download, grouped = true) {
         BackgroundStatusRow("Battery optimization", if (status.batteryExempt) "Exempt" else "Enabled")
         BackgroundStatusRow("Background activity", if (status.backgroundRestricted) "Restricted" else "Allowed",
             warning = status.backgroundRestricted)
@@ -104,7 +104,7 @@ private fun BackgroundStatusRow(label: String, value: String, warning: Boolean =
         Surface(shape = MaterialTheme.shapes.small,
             color = if (warning) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
             contentColor = if (warning) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant) {
-            Text(value, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
+            Text(value, Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
         }
     }
 }

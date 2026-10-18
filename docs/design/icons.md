@@ -16,7 +16,10 @@ shared with the adaptive and monochrome launcher resources.
 `ResponsiveUiTest` exercises 700 × 360 dp landscape, 1000 × 800 dp tablet and 360 × 740 dp at 150%
 font scale with RTL layout. These are local Compose overrides; they do not change the device's
 display settings. `ProductUiTest` also covers real IME visibility, focus traversal, autosave and
-Activity recreation.
+Activity recreation. `DownloadDesignUiTest` covers independent search/filter state, protocol
+overrides and the fixed add action with the keyboard open. `DownloadActionsUiTest` covers retry
+navigation, duplicate submission guards, failed private cleanup, tablet selection removal and
+keeping public files when deleting history entries.
 
 To collect optional PNG review captures, build and install the debug app and its test APK, then run
 instrumentation directly with `-e captureUi true` and

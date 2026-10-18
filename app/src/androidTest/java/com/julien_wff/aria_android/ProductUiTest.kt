@@ -44,8 +44,8 @@ class ProductUiTest {
         compose.onNodeWithText("HTTP or HTTPS URL").performScrollTo().performTextReplacement("https://example.org/file")
         compose.onNodeWithText("HTTP or HTTPS URL").performImeAction()
         compose.onNodeWithText("Filename").performImeAction()
-        compose.onNodeWithText("Start download").performScrollTo().performClick()
-        compose.onNodeWithText("HTTP referrer must be an absolute HTTP or HTTPS URL without credentials.").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Start download").performClick()
+        compose.onNodeWithText("HTTP referrer must be an absolute HTTP or HTTPS URL without credentials.").assertIsDisplayed()
         compose.runOnUiThread {
             compose.activity.startActivity(Intent(compose.activity, MainActivity::class.java)
                 .setAction(Intent.ACTION_SEND).setType("text/plain")
@@ -100,7 +100,7 @@ class ProductUiTest {
             withTimeout(10_000) { preferences.settings.first { it.concurrency == 2 && it.connections == 8 && it.appearance == Appearance.DARK } }
             compose.waitUntil(10_000) { compose.onAllNodesWithText("History").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithText("History").performClick()
-            compose.onNodeWithText("Search downloads").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Search downloads").assertIsDisplayed()
             compose.onNodeWithText("Settings").performClick()
             compose.onNodeWithText("Simultaneous downloads").onParent().assert(hasAnyDescendant(hasText("2")))
             compose.onNodeWithText("Connections per server").onParent().assert(hasAnyDescendant(hasText("8")))
@@ -148,14 +148,14 @@ class ProductUiTest {
             }
             compose.onNodeWithText("HTTP or HTTPS URL").performImeAction()
             compose.onNodeWithText("Filename").assertIsFocused()
-            compose.onNodeWithText("Start download").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Start download").assertIsDisplayed()
             captureUi(compose.onRoot(), "add-keyboard")
             compose.onNodeWithText("Filename").performImeAction()
             compose.waitUntil(10_000) {
                 !compose.activity.window.decorView.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime())
             }
             androidx.test.espresso.Espresso.pressBack()
-            compose.onNodeWithText("Search downloads").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Search downloads").assertIsDisplayed()
         } finally { preferences.save(original) }
     }
 
@@ -194,7 +194,7 @@ class ProductUiTest {
         }
     }
 
-    @Test fun detailsControlsPauseResumeAndConfirmCancellation(): Unit = runBlocking {
+    @Test fun detailsControlsPauseResumeDiagnosticsAndConfirmDeletion(): Unit = runBlocking {
         val controller = DownloadRuntime.controller(compose.activity)
         val preferences = DownloadRuntime.preferences(compose.activity)
         val oldSettings = preferences.read()
@@ -206,17 +206,29 @@ class ProductUiTest {
             try {
                 withContext(Dispatchers.Main) { id = controller.enqueue(server.url, name, DownloadSettings(connections = 1, speedLimit = 64 * 1024)) }
                 withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.status == DownloadStatus.DOWNLOADING } } }
-                compose.onNodeWithText(name).performScrollTo().performClick()
+                compose.onNodeWithText(name).performScrollTo().assertIsDisplayed()
+                captureUi(compose.onRoot(), "redesign-active-download")
+                compose.onNodeWithText(name).performClick()
                 compose.onNodeWithText("Pause").performClick()
-                compose.onNodeWithText("Resume").assertIsDisplayed().performClick()
+                compose.waitUntil(10_000) {
+                    controller.tasks.value.any { it.id == id && it.state.status == DownloadStatus.PAUSED } &&
+                        compose.onAllNodesWithText("Resume").fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithText("Resume").performScrollTo().assertIsDisplayed()
+                captureUi(compose.onRoot(), "redesign-download-details")
+                compose.onNodeWithText("Resume").performClick()
                 withTimeout(10_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.canPause } } }
                 compose.onNodeWithText("Pause").performScrollTo().assertIsDisplayed()
-                compose.onNodeWithContentDescription("More").performScrollTo().performClick()
-                compose.onNodeWithText("Cancel download").performClick()
-                compose.onNodeWithText("Keep downloading").assertIsDisplayed()
-                compose.onAllNodesWithText("Cancel download")[0].performClick()
-                withTimeout(10_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.status == DownloadStatus.CANCELED } } }
-                compose.onNodeWithText("Canceled").assertIsDisplayed()
+                compose.onNodeWithText("Delete").assertIsDisplayed()
+                compose.onNodeWithContentDescription("More").assertDoesNotExist()
+                compose.onNodeWithText("Cancel download").assertDoesNotExist()
+                compose.onNodeWithText("Speed · last 2 minutes").assertDoesNotExist()
+                compose.onNodeWithText("Transfer insights").performScrollTo().performClick()
+                compose.onNodeWithText("Speed · last 2 minutes").assertExists()
+                compose.activityRule.scenario.recreate()
+                compose.onNodeWithText("Speed · last 2 minutes").assertExists()
+                compose.onNodeWithText("Transfer insights").performScrollTo().performClick()
+                compose.onNodeWithText("Diagnostics").performScrollTo().performClick()
                 compose.onNodeWithText("Preview diagnostics").performScrollTo().performClick()
                 compose.onNodeWithText("Diagnostics preview").assertIsDisplayed()
                 val report = compose.onNode(hasText("Aria Downloader diagnostics", substring = true)).fetchSemanticsNode()
@@ -226,8 +238,28 @@ class ProductUiTest {
                 compose.onNodeWithText("Share").assertIsDisplayed()
                 compose.onNodeWithText("Close").performClick()
                 compose.onNodeWithText("Diagnostics preview").assertDoesNotExist()
+                compose.onNodeWithText("Delete").performScrollTo().performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("Keep").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("Keep").assertIsDisplayed()
+                val confirm = compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog()))
+                val keepBounds = compose.onNodeWithText("Keep").fetchSemanticsNode().boundsInRoot
+                assertEquals(keepBounds.center.y, confirm.fetchSemanticsNode().boundsInRoot.center.y, 4f)
+                captureUi(compose.onNode(isDialog()), "ux-delete-dialog")
+                compose.onNodeWithText("Keep").performClick()
+                assertTrue(controller.tasks.value.any { it.id == id })
+                compose.onNodeWithText("Delete").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("Keep").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
+                compose.waitUntil(10_000) { controller.tasks.value.none { it.id == id } }
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Search downloads").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("Download details").assertDoesNotExist()
+                compose.onNodeWithText("This download is no longer available.").assertDoesNotExist()
+                compose.onNode(hasText("Downloads") and isSelectable()).assertIsSelected()
+
             } finally {
-                id?.let { controller.cancelTask(it) }
+                id?.takeIf { target -> controller.tasks.value.any { it.id == target } }?.let {
+                    DownloadFiles(compose.activity, controller).delete(it, true)
+                }
                 preferences.save(oldSettings)
             }
         }

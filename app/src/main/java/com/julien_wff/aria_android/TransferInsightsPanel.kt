@@ -19,8 +19,16 @@ import kotlinx.coroutines.delay
 import kotlin.math.ceil
 
 @Composable
-internal fun TransferInsightsPanel(task: DownloadTask) {
-    val state = task.state
+internal fun TransferInsightsPanel(task: DownloadTask, showExplanation: Boolean = true) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (showExplanation) TransferExplanation(task.state)
+        SpeedGraph(task.insights.samples)
+        PieceMatrix(task)
+    }
+}
+
+@Composable
+internal fun TransferExplanation(state: DownloadState) {
     var wallTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(state.retryAt) {
         while (state.retryAt > 0) {
@@ -28,16 +36,12 @@ internal fun TransferInsightsPanel(task: DownloadTask) {
             delay(1000)
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Transfer insights", style = MaterialTheme.typography.titleLarge)
-        if (state.retryAt > 0) {
-            val seconds = ((state.retryAt - wallTime).coerceAtLeast(0) + 999) / 1000
-            Text(if (seconds > 0) "Automatic retry in ${formatTransferDuration(seconds)}" else "Retry ready; waiting for execution permission.",
-                modifier = Modifier.semantics { contentDescription = if (seconds > 0) "Automatic retry in ${formatTransferDuration(seconds, true)}" else "Retry ready; waiting for execution permission." })
-        } else Text(transferExplanation(state), style = MaterialTheme.typography.bodyMedium)
-        SpeedGraph(task.insights.samples)
-        PieceMatrix(task)
-    }
+    if (state.retryAt > 0) {
+        val seconds = ((state.retryAt - wallTime).coerceAtLeast(0) + 999) / 1000
+        Text(if (seconds > 0) "Automatic retry in ${formatTransferDuration(seconds)}" else "Retry ready; waiting for execution permission.",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.semantics { contentDescription = if (seconds > 0) "Automatic retry in ${formatTransferDuration(seconds, true)}" else "Retry ready; waiting for execution permission." })
+    } else Text(transferExplanation(state), style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable

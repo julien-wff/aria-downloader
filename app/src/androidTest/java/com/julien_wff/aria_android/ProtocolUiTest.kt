@@ -37,7 +37,7 @@ class ProtocolUiTest {
             }
             compose.waitUntil(10_000) { compose.onAllNodesWithText("Shared metalink file · Review before starting").fetchSemanticsNodes().isNotEmpty() }
             assertEquals(before, controller.tasks.value.map { it.id }.toSet())
-            compose.onNodeWithText("Review files").performScrollTo().performClick()
+            compose.onNodeWithText("Review files").performClick()
             compose.waitUntil(30_000) { controller.tasks.value.any { it.id !in before && it.state.status == DownloadStatus.AWAITING_SELECTION } }
             added = controller.tasks.value.single { it.id !in before }.id
             compose.onNodeWithText("Shared metalink").performClick()

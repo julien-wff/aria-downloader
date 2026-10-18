@@ -1,7 +1,7 @@
 # Product behavior
 
 Aria runs on Android 15+ and bundles its download engine. Downloads, History and Settings are the
-main destinations. The Material 3 Expressive interface adapts to phone and wide windows, supports
+main destinations. The Material 3 interface adapts to phone and wide windows, supports
 dynamic colors and system/light/dark appearance, and keeps forms usable with the keyboard open.
 
 ## Add and manage downloads
@@ -12,9 +12,22 @@ documents. There is no file picker. Clipboard suggestions prefill new forms with
 draft or shared input. Receiving input always leaves the user in control of starting work.
 
 HTTP downloads allow a filename, referrer and User-Agent. The queue is FIFO, with pause, resume,
-confirmed cancel and retry actions. Search and status filters help find tasks. Details show
-progress, speed, ETA, state explanations, errors and
-[session insights](transfer-insights.md).
+retry and confirmed delete actions. Delete stops unfinished work and removes the entry and private
+partial data; Pause keeps work resumable. Existing canceled entries remain retryable in History.
+A toolbar search and visible status filters help find tasks, with independent search/filter state
+for Downloads and History. Active includes running, queued and waiting transfers. Rows expose
+applicable actions directly, without an overflow menu. Empty lists offer guidance and an action to
+add a link or clear filters; initial loading has its own indicator.
+
+Successful deletion returns to Downloads. Failed deletion or declined Android consent keeps the
+entry available and reports the failure. Retry creates a new task, opens its details and confirms
+that it was added to the queue; the original History entry remains. Task actions show progress and
+prevent conflicting repeated submissions. File selection is retained if starting it fails.
+
+Details show progress, speed, ETA, state explanations, errors and
+[session insights](transfer-insights.md). Insights, source, configuration and diagnostics are
+expandable; state explanations and retry countdowns stay visible. The add form keeps its submit
+action above the keyboard, detects the protocol from the link and allows a manual protocol choice.
 
 Torrents, magnets and Metalinks resolve metadata first. Review the files, select at least one
 supported entry, then start the payload. Selection stays fixed during that transfer. Torrents may
@@ -48,7 +61,8 @@ progress and controls; denying notification permission still permits transfers a
 
 ## Settings and diagnostics
 
-Settings autosave. Defaults are three simultaneous transfers, four connections per server, unlimited
+Settings use distinct groups for Transfers, Network, Appearance and Background downloads, and
+autosave changes. Defaults are three simultaneous transfers, four connections per server, unlimited
 speed, any network and system appearance. Concurrency accepts one to six transfers; connections
 accept one to sixteen. Unmetered Wi-Fi preference applies to the authorized queue. Connection and
 speed defaults affect new requests; network and concurrency changes reconcile the queue under

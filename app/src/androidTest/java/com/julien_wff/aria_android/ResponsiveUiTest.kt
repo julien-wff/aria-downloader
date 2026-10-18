@@ -36,7 +36,9 @@ class ResponsiveUiTest {
                     key(name) { DeviceConfigurationOverride(configuration) { DownloadsScreen(model) } }
                 }
             }
-            compose.onNodeWithText("Search downloads").assertIsDisplayed()
+            compose.waitUntil(10_000) {
+                runCatching { compose.onNodeWithContentDescription("Search downloads").assertIsDisplayed(); true }.getOrDefault(false)
+            }
             captureUi(compose.onRoot(), "$name-downloads")
             compose.onNode(hasText("Settings") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
             compose.onNodeWithText("Connections per server").performScrollTo().assertIsDisplayed()
@@ -46,11 +48,13 @@ class ResponsiveUiTest {
             compose.onNode(hasText("Add download") or hasContentDescription("Add download")).performClick()
             compose.onNodeWithText("HTTP or HTTPS URL").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Filename").performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText("Start download").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("Start download").assertIsDisplayed()
             captureUi(compose.onRoot(), "$name-add")
             compose.onNodeWithContentDescription("Back").performClick()
             compose.onNodeWithText("History").performClick()
-            compose.onNodeWithText("Search downloads").assertIsDisplayed()
+            compose.waitUntil(10_000) {
+                runCatching { compose.onNodeWithContentDescription("Search downloads").assertIsDisplayed(); true }.getOrDefault(false)
+            }
         }
     }
 }
