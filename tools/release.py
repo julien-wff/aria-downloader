@@ -28,6 +28,14 @@ def versions():
     return tomllib.loads((ROOT / "gradle/libs.versions.toml").read_text())["versions"]
 
 
+def sdk_packages(config):
+    return [
+        "platform-tools", f"platforms;android-{config['androidPlatform']}",
+        f"build-tools;{config['buildTools']}", f"ndk;{config['ndk']}",
+        f"cmake;{config['cmake']}",
+    ]
+
+
 def prepare_signing(directory, environment):
     required = (
         "ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD",
@@ -100,11 +108,7 @@ def main():
             manager = args.sdk / "cmdline-tools/latest/bin/sdkmanager"
             command = [str(manager), f"--sdk_root={args.sdk}"]
             subprocess.run(command + ["--licenses"], input="y\n" * 100, text=True, check=True)
-            subprocess.run(command + [
-                "platform-tools", f"platforms;android-{config['androidSdk']}",
-                f"build-tools;{config['buildTools']}", f"ndk;{config['ndk']}",
-                f"cmake;{config['cmake']}",
-            ], check=True)
+            subprocess.run(command + sdk_packages(config), check=True)
         elif args.command == "prepare-signing":
             print(prepare_signing(args.directory, os.environ))
         else:

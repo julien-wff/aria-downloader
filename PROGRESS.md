@@ -1,5 +1,17 @@
 # Development progress
 
+## 2026-10-18 - Initial hosted release SDK correction
+
+- The first v1.0.0 release triggered Actions run 39117580531. It failed before
+  build/signing because SDK Manager could not find platforms;android-37. No APK
+  assets were uploaded. Google's stable repository publishes this platform as
+  platforms;android-37.0, matching the locally installed SDK's package.xml.
+- Added a separately pinned androidPlatform suffix (37.0), preserving API level
+  37 for Gradle, and a regression for the published SDK package identifier. All
+  five release-tool tests and `./gradlew --no-configuration-cache assembleDebug
+  lintDebug` passed. The empty initial release is being retried at
+  the corrected commit; hosted verification is recorded below once completed.
+
 ## 2026-10-18 - GitHub Release APK automation
 
 Status: release automation implemented and locally verified. The first hosted

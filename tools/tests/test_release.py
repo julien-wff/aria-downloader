@@ -10,6 +10,11 @@ SPEC.loader.exec_module(release)
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_sdk_platform_uses_published_package_identifier(self):
+        packages = release.sdk_packages(release.versions())
+        self.assertIn("platforms;android-37.0", packages)
+        self.assertNotIn("platforms;android-37", packages)
+
     def test_versions_increase_across_component_boundaries(self):
         tags = ["v0.0.1", "v0.0.999", "v0.1.0", "v0.999.999", "v1.0.0", "v2099.999.999"]
         codes = [release.version(tag)[1] for tag in tags]

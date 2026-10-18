@@ -1,5 +1,6 @@
 [versions]
 androidSdk = "37"
+androidPlatform = "37.0"
 buildTools = "37.0.0"
 jdk = "25"
 datastore = "1.2.1"

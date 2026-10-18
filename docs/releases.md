@@ -119,6 +119,9 @@ python3 -m unittest discover -s tools/tests -v
 
 Build tool and SDK versions live in `gradle/libs.versions.toml`. CI's cache keys cover
 the native sources manifest, native scripts, Gradle inputs and runner platform.
+The API level (`androidSdk = 37`) and SDK package suffix
+(`androidPlatform = 37.0`) are distinct: SDK Manager requires
+`platforms;android-37.0` for this platform.
 
 This iteration implements release automation. Broader licensing and corresponding
 source-distribution work remains separately tracked; the workflow does not select
