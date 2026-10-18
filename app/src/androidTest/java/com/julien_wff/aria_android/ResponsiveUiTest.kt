@@ -6,6 +6,8 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -36,7 +38,7 @@ class ResponsiveUiTest {
             }
             compose.onNodeWithText("Search downloads").assertIsDisplayed()
             captureUi(compose.onRoot(), "$name-downloads")
-            compose.onNodeWithText("Settings").performClick()
+            compose.onNode(hasText("Settings") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
             compose.onNodeWithText("Connections per server").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Appearance").performScrollTo().assertIsDisplayed()
             captureUi(compose.onRoot(), "$name-settings")

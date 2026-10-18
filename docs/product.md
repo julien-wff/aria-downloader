@@ -54,6 +54,14 @@ accept one to sixteen. Unmetered Wi-Fi preference applies to the authorized queu
 speed defaults affect new requests; network and concurrency changes reconcile the queue under
 visible authorization.
 
+Background downloads settings show Android’s battery optimization exemption, background restriction
+and Battery Saver status, refreshed when the app resumes. Shortcuts open battery optimization and
+app settings, where users can allow unrestricted battery use and check manufacturer-specific
+controls. Downloads and details show guidance for current background restrictions or a previous
+restriction-related interruption that is still waiting/interrupted. Normal battery optimization alone
+does not trigger a notice. Exemption offers partial protection; Android may still stop transfers for
+memory or device health. Returning from settings does not authorize new network work.
+
 Diagnostics require preview before sharing. Reports contain app/API versions and allowlisted
 structured transfer status. They omit source URLs, filenames, headers, credentials, tokens, paths
 and raw exceptions.

@@ -33,6 +33,7 @@ class SettingsLayoutTest {
                 }
             }
             compose.waitUntil(10_000) { editor.editable }
+            compose.onNodeWithText("Simultaneous downloads").performScrollTo()
             val initial = compose.onNodeWithText("Simultaneous downloads").fetchSemanticsNode().boundsInRoot
             compose.onNodeWithContentDescription("Increase Simultaneous downloads").performClick()
             compose.runOnIdle { assertEquals(SettingsSaveStatus.PENDING, editor.state.value.status) }

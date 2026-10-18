@@ -44,7 +44,7 @@ internal fun interruptionAdvice(reason: Int?, wifiOnly: Boolean): String = when 
         if (wifiOnly) "Waiting for unmetered Wi-Fi." else "Waiting for a network connection."
     JobParameters.STOP_REASON_DEVICE_STATE -> "Android paused the transfer for device health. Resume or wait for Android."
     JobParameters.STOP_REASON_BACKGROUND_RESTRICTION, JobParameters.STOP_REASON_APP_STANDBY ->
-        "Android restricted background activity. Open the app to Resume."
+        "Android restricted background activity. Review Background downloads in Settings, then Resume or wait for Android."
     JobParameters.STOP_REASON_TIMEOUT, JobParameters.STOP_REASON_TIMEOUT_ABANDONED ->
         "Android ended this execution window. Resume or wait for Android."
     JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW -> "Waiting for available device storage."

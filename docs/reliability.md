@@ -13,6 +13,24 @@ and per-file journals follow the same recovery rules. See
 [protocols](advanced-protocols.md) and [testing](testing.md) for automated coverage, host recovery
 commands and outstanding device checks.
 
+## Battery restrictions
+
+Aria uses user-initiated data transfer jobs, which are exempt from ordinary standby quotas.
+Android can still interrupt work for constraints, memory pressure or device health. Battery
+optimization exemption does not guarantee uninterrupted execution. Background downloads in Settings
+shows current system status and opens public Android settings screens; unavailable screens fall
+back to app details, then general settings. No direct exemption permission is requested.
+
+Check screen-off downloads and forced Doze on Android 15 and a newer release, with battery
+optimization enabled and exempted. Verify public-file hashes after completion or recovery. Change
+background restrictions and Battery Saver while Aria is away, return, and verify refreshed status.
+A restriction-related waiting/interrupted task shows historical guidance even after restrictions
+are removed; a resumed transfer must not keep showing that historical warning. Check a physical
+manufacturer-customized device for sleeping-app/autostart controls. Use the
+[Android Doze test procedure](https://developer.android.com/training/monitoring-device-state/doze-standby#testing_doze)
+and restore device idle/battery settings afterward. These checks do not replace user-stop and
+reboot recovery checks below.
+
 ## Device matrix
 
 Use a controlled range-capable server and verify its expected hash after publication. Run on Android

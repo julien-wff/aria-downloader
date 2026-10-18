@@ -61,6 +61,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     val snackbar = remember { SnackbarHostState() }
+    val backgroundStatus = rememberBackgroundDownloadStatus()
     var destination by rememberSaveable { mutableStateOf("Downloads") }
     var adding by rememberSaveable { mutableStateOf(false) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
@@ -190,6 +191,18 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                                     .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
                             }) { Text("Settings") }
                         }
+                        if (!adding && destination == "Downloads") {
+                            val relevantStates = if (selected != null) tasks.filter { it.id == selected }.map { it.state }
+                                else tasks.filter { !it.isHistory }.map { it.state }
+                            backgroundDownloadNotice(backgroundStatus, relevantStates)?.let { message ->
+                                Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.large) {
+                                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                        Text(message)
+                                        TextButton(onClick = { navigate("Settings") }) { Text("Background downloads") }
+                                    }
+                                }
+                            }
+                        }
                         when {
                             adding -> AddDownload(url, { url = it; if (!protocolChosen) protocol = downloadProtocol(it); model.clearError() }, name, { name = it; model.clearError() }, busy,
                                 error = error, protocol = protocol, onProtocol = { protocol = it; protocolChosen = true },
@@ -264,7 +277,7 @@ private fun Notice(icon: Int, text: String) {
 }
 
 @Composable
-private fun Section(title: String, icon: Int, content: @Composable ColumnScope.() -> Unit) {
+internal fun Section(title: String, icon: Int, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             AriaIcon(icon)
@@ -509,7 +522,13 @@ private fun Stepper(label: String, value: Int, range: IntRange, enabled: Boolean
 }
 
 @Composable
-internal fun SettingsScreen(state: SettingsEditorState, editor: SettingsEditor) {
+internal fun SettingsScreen(
+    state: SettingsEditorState,
+    editor: SettingsEditor,
+    backgroundStatus: BackgroundDownloadStatus = rememberBackgroundDownloadStatus(),
+    openSystemSettings: ((Boolean) -> Boolean)? = null,
+) {
+    val context = LocalContext.current
     val settings = state.settings
     val focus = LocalFocusManager.current
     DisposableEffect(editor) { onDispose { editor.commitSpeed() } }
@@ -520,6 +539,9 @@ internal fun SettingsScreen(state: SettingsEditorState, editor: SettingsEditor) 
                 color = if (state.status == SettingsSaveStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             if (state.status == SettingsSaveStatus.ERROR) TextButton(onClick = editor::retry) { Text("Retry") }
         }
+        BackgroundDownloadsSettings(backgroundStatus, openSystemSettings ?: { battery ->
+            openBackgroundSettings(battery, context::startActivity, context.packageName)
+        })
         Section("Transfers", R.drawable.ic_tune) {
             Stepper("Simultaneous downloads", settings.concurrency, 1..6, editor.editable) { value -> editor.update { it.copy(concurrency = value) } }
             HorizontalDivider()
