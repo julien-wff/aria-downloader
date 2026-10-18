@@ -9,11 +9,36 @@ import android.net.Uri
 import android.provider.MediaStore
 import java.io.File
 import java.io.IOException
+import java.io.FileNotFoundException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+enum class SavedFileAvailability(val message: String) {
+    CHECKING("Checking saved files…"),
+    AVAILABLE(""),
+    MISSING("File is no longer available in Downloads."),
+    INACCESSIBLE("Couldn't access the saved file. Check storage access and try again."),
+}
+
 /** Public-file actions and private staging cleanup stay in the storage module. */
 class DownloadFiles(private val context: Context, private val controller: DownloadController) {
+    suspend fun availability(task: DownloadTask): Map<String, SavedFileAvailability> = withContext(Dispatchers.IO) {
+        val uris = if (task.files.isEmpty()) listOfNotNull(task.state.publishedUri)
+            else task.files.filter { it.selected && it.published }.mapNotNull { it.publishedUri }
+        uris.distinct().associateWith { uri ->
+            try {
+                context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")?.use { }
+                    ?.let { SavedFileAvailability.AVAILABLE } ?: SavedFileAvailability.MISSING
+            } catch (_: FileNotFoundException) {
+                SavedFileAvailability.MISSING
+            } catch (_: SecurityException) {
+                SavedFileAvailability.INACCESSIBLE
+            } catch (_: IOException) {
+                SavedFileAvailability.INACCESSIBLE
+            }
+        }
+    }
+
     fun intent(task: DownloadTask, share: Boolean, fileIndex: Int? = null): Intent {
         check(task.state.status == DownloadStatus.COMPLETED) { "These files have not been saved to Downloads." }
         val selected = task.files.filter { it.selected && (fileIndex == null || it.index == fileIndex) }

@@ -19,7 +19,8 @@ for Downloads and History. Active includes running, queued and waiting transfers
 applicable actions directly, without an overflow menu. Empty lists offer guidance and an action to
 add a link or clear filters; initial loading has its own indicator.
 
-Successful deletion returns to Downloads. Failed deletion or declined Android consent keeps the
+Successful deletion keeps the current destination, search, filters and list position; deleting the
+selected task closes its details. Failed deletion or declined Android consent keeps the
 entry available and reports the failure. Retry creates a new task, opens its details and confirms
 that it was added to the queue; the original History entry remains. Task actions show progress and
 prevent conflicting repeated submissions. File selection is retained if starting it fails.
@@ -35,8 +36,13 @@ upload while downloading; seeding stops afterward.
 See [protocol behavior and limits](advanced-protocols.md).
 
 History contains completed, failed and canceled tasks. Successfully saved files can be opened or
-shared with temporary read access. Task deletion asks whether to also remove public files. A failed
-deletion or declined Android consent retains the record.
+shared with temporary read access. File actions check current saved-file access. Unavailable controls
+remain visible with muted styling;
+activating them explains the problem in a bottom snackbar. The saved-file deletion checkbox cannot
+be selected when no saved files are accessible. Multi-file downloads allow opening available files
+individually and deleting remaining saved files; sharing requires every selected file to be accessible.
+Task deletion asks whether to also remove public files. A failed deletion or declined Android consent
+retains the record.
 
 ## Saving and recovery
 

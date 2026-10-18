@@ -157,7 +157,7 @@ class DownloadActionsUiTest {
                 compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
                 compose.waitUntil(10_000) { controller.tasks.value.none { it.id == id } }
                 compose.waitUntil(10_000) { compose.onAllNodesWithText("Download details").fetchSemanticsNodes().isEmpty() }
-                compose.onNode(hasText("Downloads") and isSelectable()).assertIsSelected()
+                compose.onNode(hasText("History") and isSelectable()).assertIsSelected()
                 assertArrayEquals(server.hash(), java.security.MessageDigest.getInstance("SHA-256").digest(
                     compose.activity.contentResolver.openInputStream(uri!!)!!.use { it.readBytes() }))
             } finally {
@@ -168,6 +168,91 @@ class DownloadActionsUiTest {
             }
         }
     }
+    @Test fun missingSavedFileBlocksActionsAndDeletionStaysInFilteredHistory(): Unit = runBlocking {
+        val controller = DownloadRuntime.controller(compose.activity)
+        val prefix = "missing-ui-${System.nanoTime()}"
+        val ids = mutableListOf<String>()
+        BackgroundDownloadTest.ControlledServer().use { server ->
+            try {
+                repeat(2) { index ->
+                    val id = withContext(Dispatchers.Main) {
+                        controller.enqueue(server.url, "$prefix-$index.bin", DownloadSettings(connections = 1))
+                    }
+                    ids += id
+                    val task = withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any {
+                        it.id == id && it.state.status == DownloadStatus.COMPLETED
+                    } } }.single { it.id == id }
+                    compose.activity.contentResolver.delete(Uri.parse(task.state.publishedUri), null, null)
+                }
+                compose.onNodeWithText("History").performClick()
+                compose.onNodeWithContentDescription("Search downloads").performClick()
+                compose.onNode(hasSetTextAction()).performTextInput(prefix)
+                compose.onNode(hasText("Saved") and isSelectable()).performClick()
+                for (index in 1 downTo 0) {
+                    compose.onNodeWithText("$prefix-$index.bin").performScrollTo().performClick()
+                    compose.onNodeWithText("Open").performClick()
+                    compose.waitUntil(5_000) { compose.onAllNodesWithText(
+                        "File is no longer available in Downloads.").fetchSemanticsNodes().isNotEmpty() }
+                    compose.onNodeWithText("Download details").assertIsDisplayed()
+                    compose.onNodeWithText("Share").performClick()
+                    openDelete()
+                    compose.onNode(isToggleable()).assertIsOff().performClick().assertIsOff()
+                    compose.onNode(hasText("File is no longer available in Downloads.") and hasAnyAncestor(isPopup()))
+                        .assertIsDisplayed()
+                    compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
+                    compose.waitUntil(10_000) { controller.tasks.value.none { it.id == ids[index] } }
+                    compose.waitUntil(5_000) { compose.onAllNodesWithText("Download details").fetchSemanticsNodes().isEmpty() }
+                    compose.onNode(hasText("History") and isSelectable()).assertIsSelected()
+                    compose.onNode(hasText("Saved") and isSelectable()).assertIsSelected()
+                    compose.onNode(hasSetTextAction()).assertTextContains(prefix)
+                    if (index == 1) compose.activityRule.scenario.recreate()
+                }
+                compose.onNodeWithText("No matching downloads").assertExists()
+            } finally {
+                ids.filter { id -> controller.tasks.value.any { it.id == id } }.forEach {
+                    DownloadFiles(compose.activity, controller).delete(it, true)
+                }
+            }
+        }
+    }
+
+    @Test fun historyScrollPositionSurvivesDetailsRecreationAndRepeatedDeletion(): Unit = runBlocking {
+        val controller = DownloadRuntime.controller(compose.activity)
+        val prefix = "scroll-ui-${System.nanoTime()}"
+        val ids = mutableListOf<String>()
+        BackgroundDownloadTest.ControlledServer().use { server ->
+            try {
+                repeat(12) { index ->
+                    val id = withContext(Dispatchers.Main) { controller.enqueue(server.url, "$prefix-$index.bin") }
+                    ids += id
+                    controller.cancelTask(id)
+                }
+                compose.onNodeWithText("History").performClick()
+                compose.onNodeWithContentDescription("Search downloads").performClick()
+                compose.onNode(hasSetTextAction()).performTextInput(prefix)
+                compose.onNode(hasSetTextAction()).performImeAction()
+                compose.onNode(hasText("Canceled") and isSelectable()).performClick()
+                compose.onNode(hasScrollToIndexAction()).performScrollToIndex(12)
+                compose.onNodeWithText("$prefix-0.bin")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+                compose.activityRule.scenario.recreate()
+                repeat(2) { index ->
+                    openDelete()
+                    compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
+                    compose.waitUntil(10_000) { controller.tasks.value.none { it.id == ids[index] } }
+                    compose.waitUntil(5_000) { compose.onAllNodesWithText("Download details").fetchSemanticsNodes().isEmpty() }
+                    compose.onNodeWithText("$prefix-${index + 1}.bin").assertIsDisplayed()
+                    if (index == 0) compose.onNodeWithText("$prefix-1.bin")
+                        .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+                }
+            } finally {
+                ids.filter { id -> controller.tasks.value.any { it.id == id } }.forEach {
+                    DownloadFiles(compose.activity, controller).delete(it, true)
+                }
+            }
+        }
+    }
+
     private fun openDelete() {
         compose.onNodeWithText("Download details").assertIsDisplayed()
         compose.onNodeWithText("Delete").performScrollTo().performClick()

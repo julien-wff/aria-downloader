@@ -17,6 +17,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -51,6 +53,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.julien_wff.aria_android.downloads.*
 import com.julien_wff.aria_android.ui.theme.AriaTheme
@@ -59,6 +68,7 @@ internal class DownloadListControls {
     var query by mutableStateOf("")
     var filter by mutableStateOf("All")
     var searching by mutableStateOf(false)
+    var focusSearch = false
 
     fun closeSearch() { query = ""; searching = false }
 
@@ -76,6 +86,7 @@ internal class DownloadListControls {
 @Composable
 internal fun DownloadsScreen(model: DownloadsViewModel) {
     val tasks by model.tasks.collectAsStateWithLifecycle()
+    val availability by model.availability.collectAsStateWithLifecycle()
     val loaded by model.loaded.collectAsStateWithLifecycle()
     val persistedSettings by model.settings.collectAsStateWithLifecycle()
     val editorState by model.settingsEditor.state.collectAsStateWithLifecycle()
@@ -93,6 +104,8 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     val downloadsControls = rememberSaveable(saver = DownloadListControls.Saver) { DownloadListControls() }
     val historyControls = rememberSaveable(saver = DownloadListControls.Saver) { DownloadListControls() }
     val detailStates = rememberSaveableStateHolder()
+    val downloadsListState = rememberLazyListState()
+    val historyListState = rememberLazyListState()
     var destination by rememberSaveable { mutableStateOf("Downloads") }
     var adding by rememberSaveable { mutableStateOf(false) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
@@ -105,6 +118,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     var denied by remember { mutableStateOf(!context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        model.refreshAvailability()
         denied = !context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
     }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -113,18 +127,18 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
     LaunchedEffect(actionResults) {
         actionResults.forEach { result ->
             focus.clearFocus()
-            destination = "Downloads"
             adding = false
             deleteId = null
             when (result.kind) {
                 DownloadActionKind.RETRIED -> {
+                    destination = "Downloads"
                     downloadsControls.closeSearch()
                     downloadsControls.filter = "All"
                     selected = result.taskId
                     confirmation = "Download added to queue"
                 }
                 DownloadActionKind.DELETED -> {
-                    selected = null
+                    if (selected == result.taskId) selected = null
                     detailStates.removeState(result.taskId)
                     confirmation = "Download deleted"
                 }
@@ -139,9 +153,18 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
             selected = null
             adding = false
             deleteId = null
-            destination = "Downloads"
             model.showError("This download is no longer available.")
         }
+    }
+    val savedFileIdentities = tasks.map { task ->
+        task.id to (task.state.publishedUri to task.files.map { Triple(it.selected, it.published, it.publishedUri) })
+    }
+    LaunchedEffect(savedFileIdentities, destination, selected, deleteId) {
+        model.refreshAvailability()
+    }
+    LaunchedEffect(availability, deleteId) {
+        val task = tasks.find { it.id == deleteId }
+        if (task != null && !model.canDeleteSavedFiles(task)) deletePublic = false
     }
     LaunchedEffect(confirmation) {
         confirmation?.let { snackbar.showSnackbar(it); confirmation = null }
@@ -244,7 +267,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                             }
                         },
                         actions = {
-                            if (listVisible && !controls.searching) IconButton(onClick = { controls.searching = true }) {
+                            if (listVisible && !controls.searching) IconButton(onClick = { controls.focusSearch = true; controls.searching = true }) {
                                 AriaIcon(R.drawable.ic_search, "Search downloads")
                             }
                             if (useRail && compactHeight && !secondary && destination != "Settings" && !keyboard)
@@ -332,7 +355,7 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
                                     if (task != null) details(task) else LoadingDownloads()
                                 } else Row(Modifier.weight(1f)) {
                                     if (!loaded) Box(Modifier.weight(1f)) { LoadingDownloads() }
-                                    else TaskList(destination, tasks, selected, { focus.clearFocus(); selected = it }, actions, controls, add, Modifier.weight(1f))
+                                    else TaskList(destination, tasks, selected, { focus.clearFocus(); selected = it }, actions, controls, add, if (destination == "History") historyListState else downloadsListState, Modifier.weight(1f))
                                     if (wide && task != null) {
                                         VerticalDivider(Modifier.fillMaxHeight().padding(horizontal = 16.dp))
                                         Box(Modifier.weight(1f)) { details(task) }
@@ -347,7 +370,10 @@ internal fun DownloadsScreen(model: DownloadsViewModel) {
         deleteId?.let { id ->
             tasks.find { it.id == id }?.let { task ->
                 DeleteDownloadDialog(task, deletePublic, { deletePublic = it },
-                    dismiss = { deleteId = null }, confirm = { model.delete(id, deletePublic); deleteId = null })
+                    dismiss = { deleteId = null }, confirm = {
+                        model.delete(id, deletePublic && model.canDeleteSavedFiles(task)); deleteId = null
+                    }, savedFilesAvailable = model.canDeleteSavedFiles(task),
+                    unavailableMessage = model.fileAvailability(task).message)
             }
         }
     }
@@ -364,7 +390,10 @@ private fun LoadingDownloads() {
 
 @Composable
 internal fun DeleteDownloadDialog(task: DownloadTask, deletePublic: Boolean, onDeletePublic: (Boolean) -> Unit,
-    dismiss: () -> Unit, confirm: () -> Unit) {
+    dismiss: () -> Unit, confirm: () -> Unit, savedFilesAvailable: Boolean = true,
+    unavailableMessage: String = SavedFileAvailability.MISSING.message) {
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val hasPublicFiles = task.state.publishedUri != null || task.files.any { it.publishedUri != null }
     AlertDialog(onDismissRequest = dismiss,
         title = { Text("Delete download?") },
@@ -374,12 +403,26 @@ internal fun DeleteDownloadDialog(task: DownloadTask, deletePublic: Boolean, onD
                 else "Stop this download and remove its entry and private partial data.")
             if (hasPublicFiles) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(deletePublic, role = Role.Checkbox,
-                    onValueChange = onDeletePublic), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(deletePublic, onCheckedChange = null)
+                    onValueChange = {
+                        if (savedFilesAvailable) onDeletePublic(it)
+                        else scope.launch { snackbar.showSnackbar(unavailableMessage) }
+                    })
+                    .semantics { if (!savedFilesAvailable) stateDescription = "Saved files unavailable. Activate for details." },
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(deletePublic && savedFilesAvailable, onCheckedChange = null, enabled = savedFilesAvailable)
                     Text(if (task.files.count { it.selected } > 1) "Also delete saved files" else "Also delete saved file",
-                        modifier = Modifier.weight(1f))
+                        modifier = Modifier.weight(1f), color = if (savedFilesAvailable) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
                 }
                 Text("Saved files are kept unless selected above.", style = MaterialTheme.typography.bodySmall)
+            }
+            // Keep feedback above the modal window, positioned at the bottom of the screen.
+            if (snackbar.currentSnackbarData != null) Popup(popupPositionProvider = object : PopupPositionProvider {
+                override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
+                    layoutDirection: LayoutDirection, popupContentSize: IntSize) =
+                    IntOffset((windowSize.width - popupContentSize.width) / 2, windowSize.height - popupContentSize.height)
+            }) {
+                SnackbarHost(snackbar, Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp))
             }
         } },
         confirmButton = { Button(onClick = confirm, colors = ButtonDefaults.buttonColors(
@@ -442,7 +485,12 @@ internal fun ExpandableSection(title: String, content: @Composable ColumnScope.(
 private fun DownloadSearch(controls: DownloadListControls) {
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { requester.requestFocus() }
+    LaunchedEffect(Unit) {
+        if (controls.focusSearch) {
+            controls.focusSearch = false
+            requester.requestFocus()
+        }
+    }
     TextField(controls.query, { controls.query = it }, placeholder = { Text("Search downloads") },
         singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(requester).semantics { contentDescription = "Search downloads" },
         colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -545,7 +593,7 @@ private fun ProtocolSelector(protocol: DownloadProtocol, onProtocol: (DownloadPr
 
 @Composable
 private fun TaskList(destination: String, tasks: List<DownloadTask>, selected: String?, select: (String) -> Unit,
-    actions: @Composable (DownloadTask) -> Unit, controls: DownloadListControls, add: () -> Unit, modifier: Modifier) {
+    actions: @Composable (DownloadTask) -> Unit, controls: DownloadListControls, add: () -> Unit, listState: LazyListState, modifier: Modifier) {
     val query = controls.query
     val filter = controls.filter
     val history = destination == "History"
@@ -560,7 +608,7 @@ private fun TaskList(destination: String, tasks: List<DownloadTask>, selected: S
         else -> true
     } }.let { if (history) it else it.sortedBy { task -> task.createdAt } }
     val context = LocalContext.current
-    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(0.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 100.dp)) {
+    LazyColumn(modifier, state = listState, verticalArrangement = Arrangement.spacedBy(0.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 100.dp)) {
         item(key = "list-header") {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (!history && tasks.any { !it.isHistory }) Text(
@@ -674,9 +722,14 @@ private fun TaskProgress(state: DownloadState, details: Boolean = false) {
     state.message?.takeUnless { details && it == transferExplanation(state) }?.let { Text(it, color = if (state.status in setOf(DownloadStatus.FAILED, DownloadStatus.SAVE_FAILED)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
 }
 
+// Unavailable file actions stay tappable to explain their state without launching an intent.
 @Composable
-private fun Action(label: String, icon: Int, action: () -> Unit) {
-    FilledTonalButton(onClick = action, modifier = Modifier.heightIn(min = 48.dp)) {
+private fun Action(label: String, icon: Int, available: Boolean = true, action: () -> Unit) {
+    FilledTonalButton(onClick = action, modifier = Modifier.heightIn(min = 48.dp).semantics {
+        if (!available) stateDescription = "File unavailable. Activate for details."
+    }, colors = ButtonDefaults.filledTonalButtonColors(
+        containerColor = if (available) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+        contentColor = if (available) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))) {
         AriaIcon(icon)
         Spacer(Modifier.width(8.dp))
         Text(label)
@@ -684,9 +737,11 @@ private fun Action(label: String, icon: Int, action: () -> Unit) {
 }
 
 @Composable
-private fun SecondaryAction(label: String, icon: Int, destructive: Boolean = false, enabled: Boolean = true, action: () -> Unit) {
-    TextButton(onClick = action, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp),
-        colors = ButtonDefaults.textButtonColors(contentColor = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)) {
+private fun SecondaryAction(label: String, icon: Int, destructive: Boolean = false, enabled: Boolean = true, available: Boolean = true, action: () -> Unit) {
+    TextButton(onClick = action, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp).semantics {
+        if (!available) stateDescription = "File unavailable. Activate for details."
+    },
+        colors = ButtonDefaults.textButtonColors(contentColor = if (!available) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)) {
         AriaIcon(icon)
         Spacer(Modifier.width(8.dp))
         Text(label)
@@ -696,6 +751,8 @@ private fun SecondaryAction(label: String, icon: Int, destructive: Boolean = fal
 @Composable
 private fun TaskActions(task: DownloadTask, model: DownloadsViewModel, open: (DownloadTask, Boolean) -> Unit,
     review: () -> Unit, inDetails: Boolean = false, pending: TaskOperation?, deletionEnabled: Boolean, delete: () -> Unit) {
+    val availability by model.availability.collectAsStateWithLifecycle()
+    val available = availability[task.id] != null && model.fileAvailability(task) == SavedFileAvailability.AVAILABLE
     if (pending != null) {
         Row(Modifier.heightIn(min = 48.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -711,17 +768,17 @@ private fun TaskActions(task: DownloadTask, model: DownloadsViewModel, open: (Do
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
         when {
             task.state.canRetrySaving -> Action("Retry saving", R.drawable.ic_refresh) { model.retrySaving(task.id) }
-            task.state.status == DownloadStatus.AWAITING_SELECTION && !inDetails -> Action("Review files", R.drawable.ic_folder, review)
+            task.state.status == DownloadStatus.AWAITING_SELECTION && !inDetails -> Action("Review files", R.drawable.ic_folder, action = review)
             task.state.canResume -> Action("Resume", R.drawable.ic_play_arrow) { model.resume(task.id) }
             task.state.canPause -> Action("Pause", R.drawable.ic_pause) { model.pause(task.id) }
             task.state.status == DownloadStatus.COMPLETED && !inDetails && task.files.count { it.selected } > 1 ->
-                Action("View files", R.drawable.ic_folder, review)
+                Action("View files", R.drawable.ic_folder, action = review)
             task.state.status == DownloadStatus.COMPLETED && task.files.count { it.selected } <= 1 ->
-                Action("Open", R.drawable.ic_open_in_new) { open(task, false) }
+                Action("Open", R.drawable.ic_open_in_new, available = available) { open(task, false) }
             task.state.status in setOf(DownloadStatus.FAILED, DownloadStatus.CANCELED) -> Action("Retry", R.drawable.ic_refresh) { model.retry(task.id) }
         }
         if (task.state.canResume && task.state.canPause) SecondaryAction("Pause", R.drawable.ic_pause) { model.pause(task.id) }
-        if (task.state.status == DownloadStatus.COMPLETED) SecondaryAction("Share", R.drawable.ic_share) { open(task, true) }
+        if (task.state.status == DownloadStatus.COMPLETED) SecondaryAction("Share", R.drawable.ic_share, available = available) { open(task, true) }
         SecondaryAction("Delete", R.drawable.ic_delete, destructive = true, enabled = deletionEnabled, action = delete)
     }
 }
@@ -822,6 +879,7 @@ internal fun statusLabel(status: DownloadStatus): String = when (status) {
 @Composable
 private fun FileReview(task: DownloadTask, model: DownloadsViewModel) {
     val context = LocalContext.current
+    val availability by model.availability.collectAsStateWithLifecycle()
     val reviewing = task.state.status == DownloadStatus.AWAITING_SELECTION
     val pending = model.pendingActions.collectAsStateWithLifecycle().value[task.id]
     val enabled = pending == null
@@ -848,7 +906,12 @@ private fun FileReview(task: DownloadTask, model: DownloadsViewModel) {
                     }
                     if (task.state.status == DownloadStatus.COMPLETED && file.selected && file.published) IconButton(onClick = {
                         model.open(task, false, file.index) { context.startActivity(it) }
-                    }) { AriaIcon(R.drawable.ic_open_in_new, "Open ${file.path}") }
+                    }, modifier = Modifier.semantics {
+                        if (availability[task.id]?.get(file.publishedUri) != SavedFileAvailability.AVAILABLE)
+                            stateDescription = "File unavailable. Activate for details."
+                    }) { Icon(painterResource(R.drawable.ic_open_in_new), "Open ${file.path}", Modifier.size(24.dp),
+                        tint = if (availability[task.id]?.get(file.publishedUri) == SavedFileAvailability.AVAILABLE)
+                            LocalContentColor.current else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)) }
                 }
             }
         }

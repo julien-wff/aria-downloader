@@ -13,6 +13,7 @@ import com.julien_wff.aria_android.downloads.DownloadProtocol
 import com.julien_wff.aria_android.downloads.downloadProtocol
 import com.julien_wff.aria_android.downloads.MetadataImports
 import com.julien_wff.aria_android.downloads.DownloadRequestOptions
+import com.julien_wff.aria_android.downloads.SavedFileAvailability
 import com.julien_wff.aria_android.downloads.DownloadFiles
 import com.julien_wff.aria_android.downloads.DownloadRuntime
 import com.julien_wff.aria_android.downloads.DownloadSettings
@@ -61,6 +62,31 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     private val files = DownloadFiles(application, controller)
     val tasks = controller.tasks
     val loaded = controller.loaded
+    private val mutableAvailability = MutableStateFlow<Map<String, Map<String, SavedFileAvailability>>>(emptyMap())
+    val availability = mutableAvailability.asStateFlow()
+    private var availabilityJob: kotlinx.coroutines.Job? = null
+
+    fun refreshAvailability() {
+        availabilityJob?.cancel()
+        val snapshot = tasks.value
+        availabilityJob = viewModelScope.launch {
+            val result = snapshot.associate { it.id to files.availability(it) }
+            mutableAvailability.value = result
+        }
+    }
+
+    fun fileAvailability(task: DownloadTask, fileIndex: Int? = null): SavedFileAvailability {
+        val selected = task.files.filter { it.selected && (fileIndex == null || it.index == fileIndex) }
+        if (selected.any { !it.published || it.publishedUri == null }) return SavedFileAvailability.MISSING
+        val uris = if (task.files.isEmpty()) listOfNotNull(task.state.publishedUri) else selected.mapNotNull { it.publishedUri }
+        if (uris.isEmpty()) return SavedFileAvailability.MISSING
+        val states = uris.map { mutableAvailability.value[task.id]?.get(it) ?: SavedFileAvailability.CHECKING }
+        return states.firstOrNull { it != SavedFileAvailability.AVAILABLE } ?: SavedFileAvailability.AVAILABLE
+    }
+
+    fun canDeleteSavedFiles(task: DownloadTask): Boolean =
+        mutableAvailability.value[task.id]?.values?.any { it == SavedFileAvailability.AVAILABLE } == true
+
     private val mutableError = MutableStateFlow<String?>(null)
     val settings = preferences.settings.catch {
         mutableError.value = "Unable to load settings. Check storage before starting a download."
@@ -164,8 +190,16 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
     fun open(task: DownloadTask, share: Boolean, fileIndex: Int? = null, launch: (Intent) -> Unit) =
         taskAction(task.id, if (share) TaskOperation.SHARING else TaskOperation.OPENING,
             missingAppMessage = if (share) "No app is available to share these files." else "No app can open this file. Try Share instead.") {
-            val intent = withContext(Dispatchers.IO) { files.intent(task, share, fileIndex) }
-            launch(intent)
+            try {
+                val checked = files.availability(task)
+                mutableAvailability.value += task.id to checked
+                val status = fileAvailability(task, fileIndex)
+                if (status != SavedFileAvailability.AVAILABLE) showError(status.message)
+                else {
+                    val intent = withContext(Dispatchers.IO) { files.intent(task, share, fileIndex) }
+                    launch(intent)
+                }
+            } finally { refreshAvailability() }
         }
     private fun publishAction(kind: DownloadActionKind, taskId: String, sourceTaskId: String = taskId) {
         mutableActionResults.value += DownloadActionResult(++actionSequence, kind, taskId, sourceTaskId)

@@ -219,6 +219,7 @@ class QueuePersistenceTest {
                     withTimeout(5_000) { controller.tasks.first { it.isNotEmpty() } }
                     val files = DownloadFiles(wrapped, controller)
                     val task = controller.tasks.value.single()
+                    assertEquals(SavedFileAvailability.AVAILABLE, files.availability(task)[uri])
                     assertEquals(android.content.Intent.ACTION_VIEW, files.intent(task, false).action)
                     assertEquals("application/pdf", files.intent(task, false).type)
                     assertEquals(android.content.Intent.ACTION_CHOOSER, files.intent(task, true).action)
@@ -226,6 +227,26 @@ class QueuePersistenceTest {
                     assertTrue(controller.tasks.value.isEmpty())
                     assertFalse(source.exists())
                     assertEquals(if (deletePublic) null else true, destination.isPublished(uri))
+                    if (!deletePublic) context.contentResolver.delete(Uri.parse(uri), null, null)
+                    assertEquals(SavedFileAvailability.MISSING, files.availability(task)[uri])
+                    if (!deletePublic) {
+                        val remaining = destination.create(row.copy(id = "remaining-${System.nanoTime()}"))
+                        try {
+                            destination.output(remaining).use { it.write(7) }
+                            destination.publish(remaining)
+                            val partial = task.copy(files = listOf(
+                                DownloadFile(1, "missing.pdf", 1, publishedUri = uri, published = true),
+                                DownloadFile(2, "remaining.pdf", 1, publishedUri = remaining, published = true),
+                                DownloadFile(3, "unselected.pdf", 1, selected = false)))
+                            assertEquals(mapOf(uri to SavedFileAvailability.MISSING,
+                                remaining to SavedFileAvailability.AVAILABLE), files.availability(partial))
+                            assertEquals(android.content.Intent.ACTION_VIEW, files.intent(partial, false, 2).action)
+                            try {
+                                files.intent(partial, true)
+                                fail("Sharing must reject a missing selected file")
+                            } catch (_: java.io.FileNotFoundException) { }
+                        } finally { context.contentResolver.delete(Uri.parse(remaining), null, null) }
+                    }
                     assertTrue(store.readAll().isEmpty())
                 }
             } finally {
