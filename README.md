@@ -4,93 +4,58 @@
   <img src="docs/design/aria-icon.svg" alt="Aria Downloader icon" width="112" height="112">
 </p>
 
-<p align="center">
-  A native Android download manager powered by the aria2 engine.
-</p>
+Aria is an Android download manager powered by aria2. Paste a link or share one from another app.
+Follow the transfer, then open the saved files in Downloads.
 
-Aria brings reliable HTTP, HTTPS and Torrent downloads to Android in a focused, modern interface. Add a link
-or share one from another app, follow its progress, and find the published file in your device's
-Downloads folder. Transfers can keep running when you leave the app, with Android notifications for
-progress and quick controls.
+The download engine ships inside the app. Transfers can continue while you use other apps or lock
+the screen.
 
-## What it does
+## Features
 
-- Manage concurrent downloads in a persistent queue, with pause, resume, cancel and retry actions.
-- Automatically retry temporary connection/server failures up to three times, preserving partial files.
-- Add magnet links, torrent/Metalink web URLs, or share metadata files from another app.
-- Review completed, failed and canceled transfers in History; open or share files after they have
-  been saved.
-- Share a link into the app for review before starting a transfer.
-- Tune queue size, connection limits, speed limits, network preference and appearance.
-- Use an adaptive Material 3 interface with light and dark themes.
+- Download HTTP links, torrents, magnets and Metalinks.
+- Pause, resume and retry queued downloads.
+- Choose torrent files before downloading their contents.
+- Save files to your device's Downloads folder.
+- Track transfer speeds and completed download pieces.
+- Set speed limits and Wi-Fi preferences.
+- Use light, dark or system appearance.
 
-## Recovery and diagnostics
+## Install
 
-Temporary timeout, connection, DNS and server-busy failures retry after 5, 15 and 45 seconds.
-Waiting retries release their queue slot. Retries require an active Android transfer job; losing
-network access waits for Android to permit execution again. The unmetered Wi-Fi preference applies
-to the entire authorized queue. Server access, TLS, storage, verification and rejected-resume
-failures require user action; partial data is preserved. Manual Retry creates a fresh transfer.
+Aria requires Android 15 or newer. Download the APK from
+[GitHub Releases](https://github.com/julien-wff/aria-downloader/releases/latest). Open it on your
+device and allow installation from that source when Android asks.
 
-After reboot or an explicit Android user stop, open Aria and choose Resume. Reopening the app alone
-does not schedule downloads. Other system interruptions can resume when Android retries the existing
-job. When no reliable stop reason exists, Aria describes the interruption without guessing its cause.
+Future updates install over the existing release. A debug build uses a different signing key, so
+switching from debug to release requires uninstalling it first. Uninstalling removes unfinished
+downloads and app settings.
 
-Transfers still work with notifications disabled. In-app controls remain available, with a shortcut
-to notification settings. Download details expose retry counts, engine errors and known Android stop
-reasons. Preview diagnostics before choosing Share: reports contain app/API versions and structured
-transfer status, excluding URLs, filenames, headers, credentials, tokens, paths and raw exceptions.
+## Developer setup
 
-## Project structure
+Native builds currently support Linux x86_64. Install JDK 25, Python 3.12 or newer, and the host
+tools listed in the [native build guide](aria2/native/README.md#build).
 
-| Module       | Responsibility                                                           |
-|--------------|--------------------------------------------------------------------------|
-| `:app`       | Compose interface, navigation and app wiring                             |
-| `:downloads` | Queue, persistence, background scheduling, notifications and file export |
-| `:aria2`     | aria2 engine interface, JNI bridge and native builds                     |
+Install Android SDK platform `platforms;android-37.0`, Build Tools `37.0.0`, NDK `30.0.16248370` and
+CMake `4.1.2`. The app compiles and targets API 37, with Android 15 (API 35) as its minimum.
 
-The dependency direction is `:app` → `:downloads` → `:aria2`.
-
-## Build
-
-Open the project in Android Studio or use the Gradle wrapper. The project targets Android 15 (API
-35) and compiles against Android SDK 37. Building the app also builds its bundled native engine;
-native builds need NDK `30.0.16248370`, CMake
-`4.1.2`, and Python 3.12 or newer. Set the Android SDK path in an untracked
-`local.properties` file or through `ANDROID_HOME`.
+Clone the repository and open it in Android Studio, or use the Gradle wrapper. Set `ANDROID_HOME` to
+your SDK directory, or set `sdk.dir` in an untracked
+`local.properties` file.
 
 ```sh
-./gradlew assembleDebug
-```
-
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. See
-the [native development guide](aria2/native/README.md) for host tools and native build details.
-
-## GitHub Releases
-
-Publishing a GitHub Release with a `vX.Y.Z` tag builds, tests and signs a universal
-APK, then attaches it and SHA-256 checksums to that release. Configure the four
-signing secrets first; see [release setup and verification](docs/releases.md).
-The pipeline runs only for published releases. It has no Play Store integration.
-
-## Development
-
-Run the standard build and lint checks with:
-
-```sh
+git clone https://github.com/julien-wff/aria-downloader.git
+cd aria-downloader
 ./gradlew assembleDebug lintDebug
 ```
 
-Device tests require a connected Android 15 or newer device or emulator:
+The first build downloads and compiles the bundled native dependencies. The APK is written to
+`app/build/outputs/apk/debug/app-debug.apk`. On Windows, the Gradle wrapper is `gradlew.bat`; the
+native build scripts require a supported Linux host.
 
-```sh
-./gradlew connectedDebugAndroidTest
-```
+## Documentation
 
-Recovery scenarios and the device acceptance matrix are in [docs/reliability.md](docs/reliability.md).
-Protocol behavior and per-file publication are in [docs/advanced-protocols.md](docs/advanced-protocols.md).
-The project roadmap and milestone status are in [plan.md](plan.md) and
-[PROGRESS.md](PROGRESS.md).
-
-Transfer graphs, piece-map semantics, and duration formatting are documented in
-[transfer insights](docs/transfer-insights.md).
+Read the [product guide](docs/product.md) for app behavior and limitations.
+The [architecture guide](docs/architecture.md) explains module ownership and the transfer lifecycle.
+See [testing](docs/testing.md) for verification commands,
+[release setup](docs/releases.md) for signing and publishing, and
+[AGENTS.md](AGENTS.md) for contributor rules.
