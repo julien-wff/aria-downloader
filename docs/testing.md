@@ -155,3 +155,12 @@ adb shell am instrument -w --user 0 -e notAnnotation com.julien_wff.aria_android
 
 The clipboard test is skipped when the device remains locked. A successful instrumentation summary
 can include this assumption; inspect the detailed output before reporting passed coverage.
+
+Retry recovery JVM coverage includes exhausted transient retries followed by explicit Resume,
+asserting stable transfer identity and a fresh bounded retry budget.
+
+`DownloadActionsUiTest` verifies that a mid-stream disconnect can resume from History into the
+same pending Downloads entry with a non-zero range and matching public SHA-256 hash. Its network
+loss test disables emulator Wi-Fi/mobile data, verifies authorized work waits without spending
+retry attempts, restores the original network settings, and resumes the same destination.
+These emulator checks do not validate VPN-specific routing or private DNS.

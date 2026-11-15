@@ -187,6 +187,8 @@ class BackgroundDownloadTest {
         private val executor = Executors.newCachedThreadPool()
         val rangeRequests = AtomicLong()
         val failNext = AtomicBoolean(false)
+        val failAll = AtomicBoolean(false)
+        val rangeStarts = java.util.concurrent.CopyOnWriteArrayList<Long>()
         val url = "http://127.0.0.1:${socket.localPort}/file"
         init {
             executor.submit {
@@ -213,10 +215,11 @@ class BackgroundDownloadTest {
                             end = value.getOrNull(1)?.toIntOrNull()?.coerceAtMost(bytes.lastIndex) ?: bytes.lastIndex
                             range = true
                             rangeRequests.incrementAndGet()
+                            rangeStarts.add(start.toLong())
                         }
                     }
                     val output = client.getOutputStream()
-                    if (failNext.compareAndSet(true, false)) {
+                    if (failAll.get() || failNext.compareAndSet(true, false)) {
                         output.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                         return
                     }
@@ -229,6 +232,7 @@ class BackgroundDownloadTest {
                     output.write(header.toByteArray())
                     var offset = start
                     while (offset <= end) {
+                        if (failAll.get()) return
                         val count = minOf(16 * 1024, end - offset + 1)
                         output.write(bytes, offset, count)
                         output.flush()

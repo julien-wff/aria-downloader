@@ -20,6 +20,92 @@ class DownloadActionsUiTest {
     @get:Rule(order = 0) val visibility = TestActivityVisibilityRule()
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
 
+    @Test fun interruptedConnectionResumesSamePendingFileFromHistory() = verifyInterruptedConnection(false)
+
+    @Test fun exhaustedRetriesResumeSamePendingFileFromHistory() = verifyInterruptedConnection(true)
+
+    private fun verifyInterruptedConnection(exhaustRetries: Boolean): Unit = runBlocking {
+        val controller = DownloadRuntime.controller(compose.activity)
+        val name = "resume-ui-${System.nanoTime()}.bin"
+        var id: String? = null
+        BackgroundDownloadTest.ControlledServer().use { server ->
+            try {
+                id = withContext(Dispatchers.Main) {
+                    controller.enqueue(server.url, name, DownloadSettings(connections = 1, speedLimit = 512 * 1024))
+                }
+                withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any {
+                    it.id == id && it.state.completedBytes > 2 * 1024 * 1024
+                } } }
+                val storage = compose.activity.httpStorageForTest(id!!)
+                if (exhaustRetries) controller.pauseTask(id!!)
+                server.failAll.set(true)
+                if (exhaustRetries) withContext(Dispatchers.Main) { controller.resumeTask(id!!) }
+                withTimeout(120_000) { controller.tasks.first { tasks -> tasks.any {
+                    it.id == id && it.state.status == DownloadStatus.FAILED
+                } } }
+                val failed = controller.tasks.value.single { it.id == id }.state
+                assertTrue(failed.toString(), failed.canResume)
+                if (exhaustRetries) assertEquals(3, failed.retryCount)
+                server.failAll.set(false)
+                server.rangeStarts.clear()
+                compose.onNodeWithText("History").performClick()
+                compose.onNodeWithText(name).performScrollTo().performClick()
+                compose.onNodeWithText("Resume").assertIsDisplayed().performClick()
+                compose.waitUntil(10_000) { controller.tasks.value.single { it.id == id }.state.status != DownloadStatus.FAILED }
+                val complete = withTimeout(60_000) { controller.tasks.first { tasks -> tasks.any {
+                    it.id == id && it.state.status in setOf(DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.SAVE_FAILED)
+                } } }.single { it.id == id }
+                assertEquals(complete.state.toString(), DownloadStatus.COMPLETED, complete.state.status)
+                assertEquals(1, controller.tasks.value.count { it.state.fileName == name })
+                assertEquals(storage.second.toString(), complete.state.publishedUri)
+                assertTrue(server.rangeStarts.any { it > 0 })
+                assertArrayEquals(server.hash(), java.security.MessageDigest.getInstance("SHA-256").digest(
+                    compose.activity.contentResolver.openInputStream(storage.second)!!.use { it.readBytes() }))
+            } finally {
+                server.failAll.set(false)
+                id?.let { DownloadFiles(compose.activity, controller).delete(it, true) }
+            }
+        }
+    }
+
+    @Test fun networkLossPreservesPendingFileAndResumesAfterReconnect(): Unit = runBlocking {
+        val controller = DownloadRuntime.controller(compose.activity)
+        val automation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command: String): String = automation.executeShellCommand(command).use {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().use { reader -> reader.readText().trim() }
+        }
+        val wifi = shell("settings get global wifi_on") != "0"
+        val data = shell("settings get global mobile_data") != "0"
+        val name = "network-resume-${System.nanoTime()}.bin"
+        var id: String? = null
+        BackgroundDownloadTest.ControlledServer().use { server ->
+            try {
+                id = withContext(Dispatchers.Main) {
+                    controller.enqueue(server.url, name, DownloadSettings(connections = 1, speedLimit = 512 * 1024))
+                }
+                withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.completedBytes > 2 * 1024 * 1024 } } }
+                val storage = compose.activity.httpStorageForTest(id!!)
+                shell("svc wifi disable"); shell("svc data disable")
+                withTimeout(30_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.status == DownloadStatus.WAITING } } }
+                val waiting = controller.tasks.value.single { it.id == id }.state
+                assertEquals(0, waiting.retryCount)
+                assertTrue(waiting.completedBytes > 0)
+                shell("svc wifi ${if (wifi) "enable" else "disable"}")
+                shell("svc data ${if (data) "enable" else "disable"}")
+                withContext(Dispatchers.Main) { controller.resumeTask(id!!) }
+                val complete = withTimeout(60_000) { controller.tasks.first { tasks -> tasks.any { it.id == id && it.state.status == DownloadStatus.COMPLETED } } }.single { it.id == id }
+                assertEquals(storage.second.toString(), complete.state.publishedUri)
+                assertTrue(server.rangeStarts.any { it > 0 })
+                assertArrayEquals(server.hash(), java.security.MessageDigest.getInstance("SHA-256").digest(
+                    compose.activity.contentResolver.openInputStream(storage.second)!!.use { it.readBytes() }))
+            } finally {
+                shell("svc wifi ${if (wifi) "enable" else "disable"}")
+                shell("svc data ${if (data) "enable" else "disable"}")
+                id?.let { DownloadFiles(compose.activity, controller).delete(it, true) }
+            }
+        }
+    }
+
     @Test fun retryFromHistoryOpensNewTaskAndRejectsDuplicateSubmission(): Unit = runBlocking {
         val controller = DownloadRuntime.controller(compose.activity)
         val preferences = DownloadRuntime.preferences(compose.activity)
@@ -149,7 +235,7 @@ class DownloadActionsUiTest {
                 } } }.single { it.id == id }
                 uri = Uri.parse(completed.state.publishedUri)
                 compose.onNodeWithText("History").performClick()
-                compose.onNodeWithText(name).performScrollTo().performClick()
+                compose.onNodeWithText(name).performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
                 compose.onNodeWithText("Open").assertIsDisplayed()
                 compose.onNodeWithText("Share").assertIsDisplayed()
                 openDelete()
@@ -189,7 +275,7 @@ class DownloadActionsUiTest {
                 compose.onNode(hasSetTextAction()).performTextInput(prefix)
                 compose.onNode(hasText("Saved") and isSelectable()).performClick()
                 for (index in 1 downTo 0) {
-                    compose.onNodeWithText("$prefix-$index.bin").performScrollTo().performClick()
+                    compose.onNodeWithText("$prefix-$index.bin").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
                     compose.onNodeWithText("Open").performClick()
                     compose.waitUntil(5_000) { compose.onAllNodesWithText(
                         "File is no longer available in Downloads.").fetchSemanticsNodes().isNotEmpty() }

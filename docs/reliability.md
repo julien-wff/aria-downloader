@@ -47,3 +47,10 @@ ADB itself uses Wi-Fi.
 | Notification permission denied                  | Transfer and in-app controls work; the app shows notification status and a Settings shortcut.                                                      |
 | Temporary failure followed by permanent failure | Backoff is bounded; permanent errors stop promptly with actionable advice.                                                                         |
 | Interrupted publication                         | Retry saving preserves the destination identity and avoids duplicate public files.                                                                 |
+
+After transient connection or server failures exhaust automatic retries, Resume continues the same
+transfer with its partial data and a fresh retry budget. Explicit Resume during backoff retries
+immediately. Retry remains a fresh-task action for other failed or canceled transfers.
+
+Generic native failures with downloaded bytes also allow explicit Resume; they do not receive
+automatic retries because the error may require user attention. Native resume safety checks remain enabled.

@@ -43,7 +43,8 @@ class ProtocolUiTest {
             compose.onNodeWithText("Shared metalink").performClick()
             compose.onNodeWithText("Clear selection").performScrollTo().performClick()
             compose.onNodeWithText("Start selected files").assertIsNotEnabled()
-            compose.onNodeWithText("bundle/b.bin").performScrollTo().performClick()
+            compose.onNodeWithText("bundle/b.bin").performScrollTo()
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
             compose.onNodeWithText("1 selected ·", substring = true).assertExists()
             compose.activityRule.scenario.recreate()
             compose.onNodeWithText("Start selected files").performScrollTo().assertIsEnabled()

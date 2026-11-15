@@ -2,6 +2,8 @@ package com.julien_wff.aria_android.downloads
 
 import android.app.job.JobParameters
 
+internal fun isTransientTransferFailure(code: Int?): Boolean = code in setOf(2, 5, 6, 19, 29)
+
 internal fun failureCategory(code: Int?): String = when (code) {
     2, 5, 6, 19 -> "NETWORK"
     29 -> "SERVER_BUSY"
@@ -14,7 +16,7 @@ internal fun failureCategory(code: Int?): String = when (code) {
 }
 
 internal fun failureAdvice(code: Int?): String = when (failureCategory(code)) {
-    "NETWORK" -> "Connection failed. Check your network and Retry."
+    "NETWORK" -> "Connection failed. Check your network and Resume."
     "SERVER_BUSY" -> "The server is busy. Try again later."
     "NOT_FOUND" -> "The file was not found. Check the download link."
     "AUTHENTICATION" -> "The server refused access. Check the download link and access requirements."

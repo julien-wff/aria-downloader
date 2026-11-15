@@ -108,3 +108,7 @@ user-installed CAs are not supported.
 Release delivery uses signed GitHub APKs. There is no Play Store integration or push/PR build
 pipeline. Licensing and corresponding-source distribution remain unresolved distribution work;
 release automation does not complete them.
+
+After transient connection or server failures exhaust automatic retries, Resume continues the same
+transfer with its partial data and a fresh retry budget. Explicit Resume during backoff retries
+immediately. Retry remains a fresh-task action for other failed or canceled transfers.

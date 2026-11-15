@@ -40,6 +40,7 @@ data class DownloadState(
     val failureCategory: String? = null,
     val engineCode: Int? = null,
     val stopReason: Int? = null,
+    val hasRecoveryIdentity: Boolean = false,
 ) {
     val canStart: Boolean get() = status in setOf(
         DownloadStatus.IDLE, DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELED,
@@ -47,7 +48,9 @@ data class DownloadState(
     val canPause: Boolean get() = status in setOf(
         DownloadStatus.SCHEDULED, DownloadStatus.DOWNLOADING, DownloadStatus.WAITING, DownloadStatus.METADATA,
     )
-    val canResume: Boolean get() = status in setOf(DownloadStatus.PAUSED, DownloadStatus.WAITING)
+    val canResume: Boolean get() = status in setOf(DownloadStatus.PAUSED, DownloadStatus.WAITING) ||
+        (status == DownloadStatus.FAILED && hasRecoveryIdentity &&
+            (isTransientTransferFailure(engineCode) || (engineCode == 1 && completedBytes > 0)))
     val canRetrySaving: Boolean get() = status in setOf(DownloadStatus.STAGED, DownloadStatus.SAVE_FAILED)
     val canCancel: Boolean get() = !canStart && status !in setOf(DownloadStatus.EXPORTING, DownloadStatus.VERIFYING)
 }
@@ -206,6 +209,8 @@ class DownloadController internal constructor(
                 ready.await()
                 if (loadFailure != null) return@collect
                 mutex.withLock {
+                    // A queued failure from the previous session must not overwrite a resumed task.
+                    if (snapshot != engine.snapshots.value) return@withLock
                     val execution = lease ?: return@withLock
                     if (boundExecution !== execution) return@withLock
                     try {
@@ -287,7 +292,7 @@ class DownloadController internal constructor(
     private fun TransferRecord.view(status: DownloadStatus = this.status) = DownloadState(fileName, status,
         completedBytes, totalBytes, message = failure, publishedUri = publishedUri,
         retryCount = retryCount, retryAt = retryAt, failureCategory = failureCategory,
-        engineCode = engineCode, stopReason = stopReason)
+        engineCode = engineCode, stopReason = stopReason, hasRecoveryIdentity = taskId != null)
 
     private fun publish() {
         records.values.filter { views[it.id]?.status != DownloadStatus.DOWNLOADING }.forEach {
@@ -343,7 +348,9 @@ class DownloadController internal constructor(
     suspend fun resumeTask(id: String, settings: DownloadSettings = DownloadSettings()) = afterReady {
         val current = records.getValue(id)
         check(views.getValue(id).canResume && current.taskId != null) { "This download cannot be resumed." }
-        save(current.copy(desired = DesiredState.RUNNING, status = DownloadStatus.SCHEDULED, failure = null))
+        save(current.copy(desired = DesiredState.RUNNING, status = DownloadStatus.SCHEDULED, failure = null,
+            retryCount = 0, retryAt = if (current.retryAt > 0 || current.status == DownloadStatus.FAILED) nowMillis().coerceAtLeast(1) else 0,
+            stopReason = null))
         replaceBatch(settings)
     }
     suspend fun resume() = resumeTask(latestId())
@@ -522,14 +529,16 @@ class DownloadController internal constructor(
 
     private fun failed(current: TransferRecord, code: Int?): TransferRecord {
         val category = failureCategory(code)
-        val retry = code in setOf(2, 5, 6, 19, 29) && current.retryCount < 3
+        val retry = isTransientTransferFailure(code) && current.retryCount < 3
         val attempt = current.retryCount + if (retry) 1 else 0
         val delay = if (retry) listOf(5_000L, 15_000L, 45_000L)[attempt - 1] else 0
         return current.copy(status = if (retry) DownloadStatus.WAITING else DownloadStatus.FAILED,
             retryCount = attempt, retryAt = if (retry) nowMillis() + delay else 0,
             failureCategory = category, engineCode = code,
             failure = if (retry) "Temporary transfer failure. Automatic retry $attempt/3 in ${formatTransferDuration(delay / 1000)}."
-                else failureAdvice(code) + if (current.retryCount >= 3) " Automatic retries exhausted." else "")
+                else (if (code == 1 && current.completedBytes > 0)
+                    "Transfer interrupted. Check the link and secure connection, then Resume to continue with preserved partial data."
+                else failureAdvice(code)) + if (isTransientTransferFailure(code) && current.retryCount >= 3) " Automatic retries exhausted. Partial data is preserved; choose Resume to continue." else "")
     }
 
     private fun armRetry(execution: ExecutionLease) {

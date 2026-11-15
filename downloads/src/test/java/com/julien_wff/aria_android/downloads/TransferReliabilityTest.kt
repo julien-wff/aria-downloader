@@ -112,6 +112,85 @@ class TransferReliabilityTest {
         assertEquals(1, f.releases)
     }
 
+    @Test fun exhaustedFailureResumesSameIdentityWithFreshBudget() = runTest {
+        val f = Fixture(this)
+        val id = f.add(); f.authorize(); runCurrent()
+        val identity = f.rows.getValue(id).taskId
+        for (delay in listOf(5_000L, 15_000L, 45_000L)) {
+            f.fail(id); runCurrent(); advanceTimeBy(delay); runCurrent()
+        }
+        f.fail(id); runCurrent()
+        assertTrue(f.state(id).canResume)
+        f.controller.resumeTask(id)
+        assertEquals(0, f.rows.getValue(id).retryCount)
+        f.authorize(); runCurrent()
+        assertEquals(4, f.engine.restarted.size)
+        assertEquals(identity, f.rows.getValue(id).taskId)
+        assertEquals(1, f.rows.size)
+        f.fail(id); runCurrent()
+        assertEquals(1, f.state(id).retryCount)
+    }
+
+    @Test fun explicitResumeDuringBackoffRetriesImmediatelyAndFencesOldLease() = runTest {
+        val f = Fixture(this)
+        val id = f.add(); val old = f.authorize(); runCurrent()
+        f.fail(id); runCurrent()
+        f.controller.resumeTask(id)
+        assertEquals(0, f.rows.getValue(id).retryCount)
+        assertTrue(f.engine.restarted.isEmpty())
+        f.authorize(); runCurrent()
+        assertEquals(1, f.engine.restarted.size)
+        assertFalse(f.controller.revoke(old))
+        f.controller.networkChanged(old); runCurrent()
+        assertEquals(0, f.engine.checkpoints)
+    }
+
+    @Test fun restoredExhaustedFailureResumesOnlyAfterAuthorization() = runTest {
+        val row = TransferRecord("old", "https://example.org/file", "file", DesiredState.RUNNING,
+            DownloadStatus.FAILED, taskId = "0123456789abcdef", completedBytes = 64,
+            totalBytes = 128, retryCount = 3, engineCode = 6)
+        val f = Fixture(this, listOf(row)); runCurrent()
+        assertTrue(f.state(row.id).canResume)
+        assertEquals(0, f.schedules)
+        f.controller.resumeTask(row.id)
+        assertTrue(f.engine.additions.isEmpty())
+        f.authorize(); runCurrent()
+        assertEquals(row.taskId, f.engine.additions.single().taskId!!.value)
+        assertEquals(1, f.rows.size)
+    }
+
+    @Test fun failedResumeWriteCannotAuthorizeWork() = runTest {
+        val row = TransferRecord("old", "https://example.org/file", "file", DesiredState.RUNNING,
+            DownloadStatus.FAILED, taskId = "0123456789abcdef", retryCount = 3, engineCode = 6)
+        val f = Fixture(this, listOf(row)); runCurrent()
+        f.failWrites = true
+        try { f.controller.resumeTask(row.id); fail("Expected persistence failure") }
+        catch (_: IllegalStateException) { }
+        assertEquals(0, f.schedules)
+        assertEquals(row, f.rows.getValue(row.id))
+        assertTrue(f.engine.additions.isEmpty())
+    }
+
+    @Test fun genericInterruptionWithPartialBytesAllowsOnlyExplicitResume() = runTest {
+        val f = Fixture(this)
+        val id = f.add(); f.authorize(); runCurrent()
+        f.fail(id, 1); runCurrent()
+        assertTrue(f.state(id).canResume)
+        assertEquals(0, f.state(id).retryCount)
+        advanceTimeBy(100_000); runCurrent()
+        assertTrue(f.engine.restarted.isEmpty())
+        f.controller.resumeTask(id); f.authorize(); runCurrent()
+        assertEquals(1, f.engine.restarted.size)
+    }
+
+    @Test fun permanentFailuresAndMissingIdentityDoNotOfferResume() {
+        for (code in listOf(1, 8, 9, 10, 24, 32)) {
+            assertFalse(DownloadState(status = DownloadStatus.FAILED, engineCode = code,
+                hasRecoveryIdentity = true).canResume)
+        }
+        assertFalse(DownloadState(status = DownloadStatus.FAILED, engineCode = 6).canResume)
+    }
+
     @Test fun backoffReleasesSlotAndDuplicateFailureDoesNotSpendBudget() = runTest {
         val f = Fixture(this)
         val first = f.add("first"); val second = f.add("second")
